@@ -10,7 +10,7 @@ local VirtualInputManager = game:GetService("VirtualInputManager")
 local player = Players.LocalPlayer
 local mouse = player:GetMouse()
 
--- ======================== CLICK ========================
+-- ========== CLICK ==========
 local function doClick()
     local success = pcall(function()
         VirtualInputManager:SendMouseButtonEvent(0, 0, 0, true, game, 0)
@@ -27,7 +27,7 @@ local function doClick()
     return true
 end
 
--- ======================== GUI ========================
+-- ========== GUI ==========
 local gui = Instance.new("ScreenGui")
 gui.Name = "OreoHub"
 gui.ResetOnSpawn = false
@@ -111,7 +111,7 @@ for _, name in ipairs(tabs) do
     contentFrames[name] = f
 end
 
--- ========== TOGGLE HELPER ==========
+-- ========== Helper: Toggle ==========
 local function makeToggle(parent, label, default, callback)
     local container = Instance.new("Frame")
     container.Size = UDim2.new(1, 0, 0, 36)
@@ -152,7 +152,7 @@ local function makeToggle(parent, label, default, callback)
     return function() return state end
 end
 
--- ========== SLIDER HELPER ==========
+-- ========== Helper: Slider ==========
 local function makeSlider(parent, label, minV, maxV, defaultV, callback)
     local container = Instance.new("Frame")
     container.Size = UDim2.new(1, 0, 0, 48)
@@ -232,22 +232,17 @@ end
 
 -- ========== MAIN TAB ==========
 local mainTab = contentFrames["Main"]
-
--- Auto Click
 local autoState = false
 local getAuto = makeToggle(mainTab, "Auto Click", false, function(v) autoState = v end)
 
--- Interval
 local intervalVal = 0.5
 local getInterval = makeSlider(mainTab, "Interval", 0.1, 5.0, 0.5, function(v) intervalVal = v end)
 
--- Khoảng cách
 local spacer = Instance.new("Frame")
 spacer.Size = UDim2.new(1, 0, 0, 8)
 spacer.BackgroundTransparency = 1
 spacer.Parent = mainTab
 
--- Anti-AFK
 local afkState = false
 local getAfk = makeToggle(mainTab, "Anti-AFK", false, function(v) afkState = v end)
 
