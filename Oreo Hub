@@ -1,29 +1,51 @@
 --[[
-    🍪 Oreo Hub – Auto Click & Anti-AFK
-    Version 1.0
-    Credits: Solara ném scrip
+    🍪 Oreo Hub v2.0
+    Sửa lỗi hiển thị + auto click
 ]]
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
 local VirtualInputManager = game:GetService("VirtualInputManager")
 local player = Players.LocalPlayer
 local mouse = player:GetMouse()
 
--- ========== CLICK ==========
+-- ========== CLICK (đa phương thức) ==========
 local function doClick()
-    local success = pcall(function()
+    -- Phương thức 1: VirtualInputManager (ưu tiên)
+    local success, err = pcall(function()
         VirtualInputManager:SendMouseButtonEvent(0, 0, 0, true, game, 0)
         VirtualInputManager:SendMouseButtonEvent(0, 0, 0, false, game, 0)
     end)
-    if success then return true end
-    if mouse1click then pcall(mouse1click); return true end
+    if success then
+        print("🖱️ Click via VirtualInputManager")
+        return true
+    end
+
+    -- Phương thức 2: mouse1click (thường có trong executors)
+    if mouse1click then
+        pcall(mouse1click)
+        print("🖱️ Click via mouse1click")
+        return true
+    end
+
+    -- Phương thức 3: mouseclick (một số executor dùng tên này)
+    if mouseclick then
+        pcall(mouseclick)
+        print("🖱️ Click via mouseclick")
+        return true
+    end
+
+    -- Phương thức 4: Gửi sự kiện qua ContextActionService
     pcall(function()
         local args = {Enum.UserInputState.Begin, Enum.KeyCode.Button1, Vector2.new(mouse.X, mouse.Y)}
         game:GetService("ContextActionService"):FireInputEvent(args)
+        wait(0.02)
         args[1] = Enum.UserInputState.End
         game:GetService("ContextActionService"):FireInputEvent(args)
+        print("🖱️ Click via ContextActionService")
     end)
+
     return true
 end
 
@@ -33,10 +55,11 @@ gui.Name = "OreoHub"
 gui.ResetOnSpawn = false
 gui.Parent = player:WaitForChild("PlayerGui")
 
+-- Main frame
 local main = Instance.new("Frame")
-main.Size = UDim2.new(0, 360, 0, 350)
-main.Position = UDim2.new(0.5, -180, 0.5, -175)
-main.BackgroundColor3 = Color3.fromRGB(28, 28, 38)
+main.Size = UDim2.new(0, 360, 0, 360)  -- tăng chiều cao 1 chút
+main.Position = UDim2.new(0.5, -180, 0.5, -180)
+main.BackgroundColor3 = Color3.fromRGB(25, 25, 35)
 main.BorderSizePixel = 0
 main.Parent = gui
 
@@ -111,7 +134,7 @@ for _, name in ipairs(tabs) do
     contentFrames[name] = f
 end
 
--- ========== Helper: Toggle ==========
+-- ========== TOGGLE ==========
 local function makeToggle(parent, label, default, callback)
     local container = Instance.new("Frame")
     container.Size = UDim2.new(1, 0, 0, 36)
@@ -148,11 +171,12 @@ local function makeToggle(parent, label, default, callback)
         btn.Text = state and "ON" or "OFF"
         btn.BackgroundColor3 = state and Color3.fromRGB(0, 200, 80) or Color3.fromRGB(200, 60, 60)
         if callback then callback(state) end
+        print(label .. " -> " .. (state and "ON" or "OFF"))
     end)
     return function() return state end
 end
 
--- ========== Helper: Slider ==========
+-- ========== SLIDER ==========
 local function makeSlider(parent, label, minV, maxV, defaultV, callback)
     local container = Instance.new("Frame")
     container.Size = UDim2.new(1, 0, 0, 48)
@@ -254,7 +278,7 @@ local getLag = makeToggle(settingsTab, "Anti-Lag", false, function(v) lagState =
 local infoLabel = Instance.new("TextLabel")
 infoLabel.Size = UDim2.new(1, 0, 0, 40)
 infoLabel.Position = UDim2.new(0, 0, 0.5, 0)
-infoLabel.Text = "Giảm tải CPU khi click"
+infoLabel.Text = "Bật Anti-Lag để giảm CPU"
 infoLabel.TextColor3 = Color3.fromRGB(160, 160, 180)
 infoLabel.TextSize = 14
 infoLabel.Font = Enum.Font.Arial
@@ -265,7 +289,7 @@ infoLabel.Parent = settingsTab
 local aboutTab = contentFrames["About"]
 local about = Instance.new("TextLabel")
 about.Size = UDim2.new(1, 0, 1, 0)
-about.Text = "🍪 Oreo Hub v1.0\n\n• Auto Click chuột trái\n• Chống AFK (phím W)\n• Giao diện thân thiện\n\n💻 Credits: Solara ném scrip"
+about.Text = "🍪 Oreo Hub v2.0\n\n• Auto Click chuột trái (đa phương thức)\n• Chống AFK (phím W)\n• Giao diện thân thiện\n\n💻 Credits: Solara ném scrip"
 about.TextColor3 = Color3.fromRGB(200, 200, 220)
 about.TextSize = 16
 about.Font = Enum.Font.Arial
@@ -322,18 +346,22 @@ RunService.Heartbeat:Connect(function()
         clickRunning = true
         clickThread = coroutine.create(clickLoop)
         coroutine.resume(clickThread)
+        print("✅ Auto Click started")
     elseif not autoState and clickThread then
         clickRunning = false
         clickThread = nil
+        print("⏸️ Auto Click stopped")
     end
 
     if afkState and not afkThread then
         afkRunning = true
         afkThread = coroutine.create(afkLoop)
         coroutine.resume(afkThread)
+        print("✅ Anti-AFK started")
     elseif not afkState and afkThread then
         afkRunning = false
         afkThread = nil
+        print("⏸️ Anti-AFK stopped")
     end
 end)
 
@@ -362,7 +390,8 @@ gui.AncestryChanged:Connect(function()
     if not gui.Parent then
         clickRunning = false; afkRunning = false
         clickThread = nil; afkThread = nil
+        print("🧹 Oreo Hub closed")
     end
 end)
 
-print("🍪 Oreo Hub v1.0 loaded! Enjoy!")
+print("🍪 Oreo Hub v2.0 loaded! Enjoy!")
