@@ -1,6 +1,7 @@
 --[[
-    🍪 Oreo Hub v2.0
-    Sửa lỗi hiển thị + auto click
+    🍪 Oreo Hub v3.0
+    Sửa auto click (đa phương thức) + anti-afk không di chuyển
+    Credits: Solara ném scrip
 ]]
 
 local Players = game:GetService("Players")
@@ -10,43 +11,73 @@ local VirtualInputManager = game:GetService("VirtualInputManager")
 local player = Players.LocalPlayer
 local mouse = player:GetMouse()
 
--- ========== CLICK (đa phương thức) ==========
+-- ========== CLICK (đa phương thức tối ưu) ==========
 local function doClick()
-    -- Phương thức 1: VirtualInputManager (ưu tiên)
-    local success, err = pcall(function()
+    -- Phương thức 1: VirtualInputManager
+    local success = pcall(function()
         VirtualInputManager:SendMouseButtonEvent(0, 0, 0, true, game, 0)
         VirtualInputManager:SendMouseButtonEvent(0, 0, 0, false, game, 0)
     end)
-    if success then
-        print("🖱️ Click via VirtualInputManager")
-        return true
-    end
+    if success then print("🖱️ Click: VirtualInputManager") return true end
 
-    -- Phương thức 2: mouse1click (thường có trong executors)
+    -- Phương thức 2: UserInputService (nếu executor hỗ trợ)
+    success = pcall(function()
+        local args = {
+            UserInputService:GetMouseLocation().X,
+            UserInputService:GetMouseLocation().Y,
+            0, true
+        }
+        UserInputService:SendInputEvent(Enum.InputType.MouseButton1, args, game)
+        wait(0.02)
+        UserInputService:SendInputEvent(Enum.InputType.MouseButton1, args, game)
+    end)
+    if success then print("🖱️ Click: UserInputService") return true end
+
+    -- Phương thức 3: mouse1click (thường có)
     if mouse1click then
         pcall(mouse1click)
-        print("🖱️ Click via mouse1click")
+        print("🖱️ Click: mouse1click")
         return true
     end
 
-    -- Phương thức 3: mouseclick (một số executor dùng tên này)
+    -- Phương thức 4: mouseclick (một số executor)
     if mouseclick then
         pcall(mouseclick)
-        print("🖱️ Click via mouseclick")
+        print("🖱️ Click: mouseclick")
         return true
     end
 
-    -- Phương thức 4: Gửi sự kiện qua ContextActionService
+    -- Phương thức 5: ContextActionService
     pcall(function()
-        local args = {Enum.UserInputState.Begin, Enum.KeyCode.Button1, Vector2.new(mouse.X, mouse.Y)}
+        local args = {Enum.UserInputState.Begin, Enum.KeyCode.Button1, mouse}
         game:GetService("ContextActionService"):FireInputEvent(args)
         wait(0.02)
         args[1] = Enum.UserInputState.End
         game:GetService("ContextActionService"):FireInputEvent(args)
-        print("🖱️ Click via ContextActionService")
+        print("🖱️ Click: ContextActionService")
     end)
 
     return true
+end
+
+-- ========== HÀM ANTI-AFK (không di chuyển) ==========
+local function antiAfkAction()
+    -- Gửi phím Shift trái (không ảnh hưởng di chuyển)
+    pcall(function()
+        VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.LeftShift, false, game)
+        wait(0.05)
+        VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.LeftShift, false, game)
+    end)
+
+    -- Di chuyển chuột một chút (cũng giúp chống AFK)
+    pcall(function()
+        local x, y = UserInputService:GetMouseLocation().X, UserInputService:GetMouseLocation().Y
+        VirtualInputManager:SendMouseMovementEvent(x + 1, y + 1, 0, game)
+        wait(0.02)
+        VirtualInputManager:SendMouseMovementEvent(x, y, 0, game)
+    end)
+
+    print("🔄 Anti-AFK: sent Shift + mouse move")
 end
 
 -- ========== GUI ==========
@@ -55,9 +86,8 @@ gui.Name = "OreoHub"
 gui.ResetOnSpawn = false
 gui.Parent = player:WaitForChild("PlayerGui")
 
--- Main frame
 local main = Instance.new("Frame")
-main.Size = UDim2.new(0, 360, 0, 360)  -- tăng chiều cao 1 chút
+main.Size = UDim2.new(0, 360, 0, 360)
 main.Position = UDim2.new(0.5, -180, 0.5, -180)
 main.BackgroundColor3 = Color3.fromRGB(25, 25, 35)
 main.BorderSizePixel = 0
@@ -289,7 +319,7 @@ infoLabel.Parent = settingsTab
 local aboutTab = contentFrames["About"]
 local about = Instance.new("TextLabel")
 about.Size = UDim2.new(1, 0, 1, 0)
-about.Text = "🍪 Oreo Hub v2.0\n\n• Auto Click chuột trái (đa phương thức)\n• Chống AFK (phím W)\n• Giao diện thân thiện\n\n💻 Credits: Solara ném scrip"
+about.Text = "🍪 Oreo Hub v3.0\n\n• Auto Click (đa phương thức)\n• Anti-AFK (Shift + mouse move)\n• Giao diện thân thiện\n\n💻 Credits: Solara ném scrip"
 about.TextColor3 = Color3.fromRGB(200, 200, 220)
 about.TextSize = 16
 about.Font = Enum.Font.Arial
@@ -329,12 +359,8 @@ end
 local function afkLoop()
     while afkRunning do
         if afkState then
-            pcall(function()
-                VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.W, false, game)
-                wait(0.05)
-                VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.W, false, game)
-            end)
-            wait(5)
+            antiAfkAction()
+            wait(10) -- gửi mỗi 10 giây
         else
             wait(0.5)
         end
@@ -357,7 +383,7 @@ RunService.Heartbeat:Connect(function()
         afkRunning = true
         afkThread = coroutine.create(afkLoop)
         coroutine.resume(afkThread)
-        print("✅ Anti-AFK started")
+        print("✅ Anti-AFK started (Shift + mouse move)")
     elseif not afkState and afkThread then
         afkRunning = false
         afkThread = nil
@@ -394,4 +420,4 @@ gui.AncestryChanged:Connect(function()
     end
 end)
 
-print("🍪 Oreo Hub v2.0 loaded! Enjoy!")
+print("🍪 Oreo Hub v3.0 loaded! Enjoy!")
