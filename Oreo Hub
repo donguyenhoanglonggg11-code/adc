@@ -1,481 +1,343 @@
---[[
-    🍪 Oreo Hub v5.1
-    Sửa lỗi font, Settings rõ ràng, FPS xuống dòng
-    Credits: Solara ném scrip
-]]
-
+-- Services
 local Players = game:GetService("Players")
-local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
-local VirtualInputManager = game:GetService("VirtualInputManager")
-local player = Players.LocalPlayer
-local mouse = player:GetMouse()
+local RunService = game:GetService("RunService")
+local Player = Players.LocalPlayer
 
--- ===================== FPS COUNTER =====================
-local fpsCounter = { current = 0, frameCount = 0, lastTime = tick() }
+-- Variables
+local AutoClickEnabled = false       -- Bật/tắt click
+local AutoTeleEnabled = false        -- Bật/tắt tele tự động
+local AntiAFKEnabled = false
+local AntiLagEnabled = false
 
-local function updateFPS()
-    fpsCounter.frameCount = fpsCounter.frameCount + 1
-    local now = tick()
-    if now - fpsCounter.lastTime >= 1 then
-        fpsCounter.current = fpsCounter.frameCount
-        fpsCounter.frameCount = 0
-        fpsCounter.lastTime = now
+-- Biến lưu vị trí
+local TeleStartPos = nil             -- Vị trí sẽ tele về
+local AutoClickTimer = 0             -- Đếm giây cho tele (nếu AutoTele bật)
+local TELEPORT_INTERVAL = 60         -- 60 giây
+
+local ClickLoop = nil                -- Kết nối vòng lặp click
+local TeleLoop = nil                 -- Kết nối vòng lặp tele
+
+-- ===== HÀM CLICK (không tele) =====
+local function PerformClick()
+    local success, err = pcall(function()
+        local VIM = game:GetService("VirtualInputManager")
+        VIM:SendMouseButtonEvent(0, 0, 0, true, game, 0)
+        task.wait(0.03)
+        VIM:SendMouseButtonEvent(0, 0, 0, false, game, 0)
+    end)
+    if not success then
+        pcall(function() mouse1click() end)
     end
 end
-RunService.Heartbeat:Connect(updateFPS)
 
--- ===================== CLICK =====================
-local function performClick()
-    local success = pcall(function()
-        VirtualInputManager:SendMouseButtonEvent(0, 0, 0, true, game, 0)
-        VirtualInputManager:SendMouseButtonEvent(0, 0, 0, false, game, 0)
+-- ===== HÀM TELE VỀ VỊ TRÍ ĐÃ LƯU =====
+local function TeleportToSaved()
+    if not TeleStartPos then
+        print("⚠️ [Oreo] Chưa có vị trí lưu. Hãy bật Auto Tele hoặc dùng 'Lưu vị trí'.")
+        return false
+    end
+    local char = Player.Character
+    if not char then
+        print("❌ [Oreo] Không tìm thấy nhân vật.")
+        return false
+    end
+    local hrp = char:FindFirstChild("HumanoidRootPart")
+    if not hrp then
+        print("❌ [Oreo] Không tìm thấy HumanoidRootPart.")
+        return false
+    end
+    
+    -- Thử tele CFrame
+    local success, err = pcall(function()
+        hrp.CFrame = CFrame.new(TeleStartPos + Vector3.new(0, 2, 0))
     end)
-    if success then return true end
-    if mouse1click then pcall(mouse1click); return true end
-    pcall(function()
-        local args = {Enum.UserInputState.Begin, Enum.KeyCode.Button1, Vector2.new(mouse.X, mouse.Y)}
-        game:GetService("ContextActionService"):FireInputEvent(args)
-        args[1] = Enum.UserInputState.End
-        game:GetService("ContextActionService"):FireInputEvent(args)
-    end)
+    if success then
+        print("✅ [Oreo] Tele về vị trí: " .. tostring(TeleStartPos))
+        return true
+    else
+        print("❌ [Oreo] Tele thất bại: " .. tostring(err) .. " → thử dùng MoveTo")
+        local humanoid = char:FindFirstChild("Humanoid")
+        if humanoid then
+            humanoid:MoveTo(TeleStartPos)
+            return true
+        end
+        return false
+    end
+end
+
+-- ===== HÀM LƯU VỊ TRÍ HIỆN TẠI =====
+local function SaveCurrentPosition()
+    local char = Player.Character
+    if not char or not char:FindFirstChild("HumanoidRootPart") then
+        print("❌ [Oreo] Không thể lưu vị trí – nhân vật chưa sẵn sàng.")
+        return false
+    end
+    TeleStartPos = char.HumanoidRootPart.Position
+    print("📍 [Oreo] Đã lưu vị trí: " .. tostring(TeleStartPos))
     return true
 end
 
--- ===================== ANTI-AFK =====================
-local function antiAfkAction()
-    pcall(function()
-        VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.LeftShift, false, game)
-        wait(0.05)
-        VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.LeftShift, false, game)
-    end)
-    pcall(function()
-        local x, y = UserInputService:GetMouseLocation().X, UserInputService:GetMouseLocation().Y
-        VirtualInputManager:SendMouseMovementEvent(x + 1, y + 1, 0, game)
-        wait(0.02)
-        VirtualInputManager:SendMouseMovementEvent(x, y, 0, game)
-    end)
-end
+-- ===== TẠO GUI =====
+local ScreenGui = Instance.new("ScreenGui")
+ScreenGui.Name = "OreoHubGUI"
+ScreenGui.Parent = Player:WaitForChild("PlayerGui")
 
--- ===================== GUI =====================
-local screenGui = Instance.new("ScreenGui")
-screenGui.Name = "OreoHub"
-screenGui.ResetOnSpawn = false
-screenGui.Parent = player:WaitForChild("PlayerGui")
+local MainFrame = Instance.new("Frame")
+MainFrame.Size = UDim2.new(0, 420, 0, 380)
+MainFrame.Position = UDim2.new(0.5, -210, 0.5, -190)
+MainFrame.BackgroundColor3 = Color3.fromRGB(30, 30, 35)
+MainFrame.BorderSizePixel = 0
+MainFrame.Parent = ScreenGui
 
-local main = Instance.new("Frame")
-main.Size = UDim2.new(0, 450, 0, 420)
-main.Position = UDim2.new(0.5, -225, 0.5, -210)
-main.BackgroundColor3 = Color3.fromRGB(20, 20, 30)
-main.BorderSizePixel = 0
-main.ClipsDescendants = true
-main.Parent = screenGui
-
-local corner = Instance.new("UICorner")
-corner.CornerRadius = UDim.new(0, 14)
-corner.Parent = main
-
-local shadow = Instance.new("ImageLabel")
-shadow.Image = "rbxassetid://1313578026"
-shadow.ImageColor3 = Color3.fromRGB(0,0,0)
-shadow.ImageTransparency = 0.6
-shadow.ScaleType = Enum.ScaleType.Slice
-shadow.SliceCenter = Rect.new(10,10,10,10)
-shadow.Size = UDim2.new(1, 20, 1, 20)
-shadow.Position = UDim2.new(0, -10, 0, -10)
-shadow.ZIndex = 0
-shadow.Parent = main
-
--- Header
-local header = Instance.new("Frame")
-header.Size = UDim2.new(1, 0, 0, 60)
-header.BackgroundColor3 = Color3.fromRGB(40, 40, 65)
-header.BorderSizePixel = 0
-header.Parent = main
-local headerCorner = Instance.new("UICorner")
-headerCorner.CornerRadius = UDim.new(0, 14)
-headerCorner.Parent = header
-
-local title = Instance.new("TextLabel")
-title.Size = UDim2.new(1, -20, 1, 0)
-title.Position = UDim2.new(0, 10, 0, 0)
-title.Text = "🍪 Oreo Hub"
-title.TextColor3 = Color3.fromRGB(255, 255, 255)
-title.TextXAlignment = Enum.TextXAlignment.Left
-title.TextScaled = true
-title.Font = Enum.Font.GothamBold
-title.BackgroundTransparency = 1
-title.Parent = header
-
-local closeBtn = Instance.new("TextButton")
-closeBtn.Size = UDim2.new(0, 30, 0, 30)
-closeBtn.Position = UDim2.new(1, -40, 0, 15)
-closeBtn.Text = "✕"
-closeBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-closeBtn.TextScaled = true
-closeBtn.Font = Enum.Font.GothamBold
-closeBtn.BackgroundColor3 = Color3.fromRGB(200, 50, 50)
-closeBtn.BorderSizePixel = 0
-closeBtn.Parent = header
-local closeCorner = Instance.new("UICorner")
-closeCorner.CornerRadius = UDim.new(0, 6)
-closeCorner.Parent = closeBtn
-closeBtn.MouseButton1Click:Connect(function() screenGui:Destroy() end)
+local Title = Instance.new("TextLabel")
+Title.Size = UDim2.new(1, 0, 0, 30)
+Title.BackgroundColor3 = Color3.fromRGB(20, 20, 25)
+Title.Text = "🍪 Oreo Hub"
+Title.TextColor3 = Color3.fromRGB(255, 255, 255)
+Title.TextScaled = true
+Title.Font = Enum.Font.GothamBold
+Title.Parent = MainFrame
 
 -- Tabs
-local tabContainer = Instance.new("Frame")
-tabContainer.Size = UDim2.new(1, -20, 0, 40)
-tabContainer.Position = UDim2.new(0, 10, 0, 70)
-tabContainer.BackgroundTransparency = 1
-tabContainer.Parent = main
+local Tabs = {"Main", "Settings", "About"}
+local TabButtons = {}
+local ContentFrames = {}
 
-local tabs = {"Main", "Settings", "About"}
-local tabButtons = {}
-for i, name in ipairs(tabs) do
+for i, tabName in ipairs(Tabs) do
     local btn = Instance.new("TextButton")
-    btn.Size = UDim2.new(1/3, -4, 1, -4)
-    btn.Position = UDim2.new((i-1)/3, 2, 0, 2)
-    btn.BackgroundColor3 = Color3.fromRGB(60, 60, 85)
-    btn.Text = name
-    btn.TextColor3 = Color3.fromRGB(200, 200, 220)
+    btn.Size = UDim2.new(0, 130, 0, 30)
+    btn.Position = UDim2.new(0, 5 + ((i-1) * 135), 0, 35)
+    btn.BackgroundColor3 = Color3.fromRGB(50, 50, 55)
+    btn.Text = tabName
+    btn.TextColor3 = Color3.fromRGB(255, 255, 255)
     btn.TextScaled = true
     btn.Font = Enum.Font.Gotham
     btn.BorderSizePixel = 0
-    btn.AutoButtonColor = false
-    btn.Parent = tabContainer
-    tabButtons[name] = btn
-    local btnCorner = Instance.new("UICorner")
-    btnCorner.CornerRadius = UDim.new(0, 8)
-    btnCorner.Parent = btn
+    btn.Parent = MainFrame
+    TabButtons[tabName] = btn
+
+    local content = Instance.new("Frame")
+    content.Size = UDim2.new(1, -10, 1, -75)
+    content.Position = UDim2.new(0, 5, 0, 70)
+    content.BackgroundTransparency = 1
+    content.Visible = (tabName == "Main")
+    content.Parent = MainFrame
+    ContentFrames[tabName] = content
+
+    btn.MouseButton1Click:Connect(function()
+        for _, frame in pairs(ContentFrames) do frame.Visible = false end
+        ContentFrames[tabName].Visible = true
+    end)
 end
 
--- Content
-local content = Instance.new("Frame")
-content.Size = UDim2.new(1, -24, 1, -130)
-content.Position = UDim2.new(0, 12, 0, 120)
-content.BackgroundTransparency = 1
-content.Parent = main
+-- ================= MAIN TAB =================
+local mainContent = ContentFrames["Main"]
 
-local contentFrames = {}
-for _, name in ipairs(tabs) do
-    local f = Instance.new("Frame")
-    f.Size = UDim2.new(1, 0, 1, 0)
-    f.BackgroundTransparency = 1
-    f.Visible = false
-    f.Parent = content
-    contentFrames[name] = f
-end
+-- 1. Nút Auto Click (chỉ click, không tele)
+local AutoClickBtn = Instance.new("TextButton")
+AutoClickBtn.Size = UDim2.new(0, 220, 0, 40)
+AutoClickBtn.Position = UDim2.new(0.5, -110, 0, 10)
+AutoClickBtn.BackgroundColor3 = Color3.fromRGB(60, 60, 65)
+AutoClickBtn.Text = "❌ Auto Click: OFF"
+AutoClickBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+AutoClickBtn.TextScaled = true
+AutoClickBtn.Font = Enum.Font.Gotham
+AutoClickBtn.BorderSizePixel = 0
+AutoClickBtn.Parent = mainContent
 
--- ========== TOGGLE ==========
-local function createToggle(parent, label, default, callback)
-    local container = Instance.new("Frame")
-    container.Size = UDim2.new(1, 0, 0, 40)
-    container.BackgroundTransparency = 1
-    container.Parent = parent
-
-    local lbl = Instance.new("TextLabel")
-    lbl.Size = UDim2.new(0.65, -10, 1, 0)
-    lbl.Text = label
-    lbl.TextColor3 = Color3.fromRGB(235, 235, 245)
-    lbl.TextXAlignment = Enum.TextXAlignment.Left
-    lbl.BackgroundTransparency = 1
-    lbl.Font = Enum.Font.Gotham
-    lbl.TextScaled = true
-    lbl.Parent = container
-
-    local switchBg = Instance.new("Frame")
-    switchBg.Size = UDim2.new(0, 54, 0, 28)
-    switchBg.Position = UDim2.new(1, -60, 0.5, -14)
-    switchBg.BackgroundColor3 = default and Color3.fromRGB(0, 200, 80) or Color3.fromRGB(150, 150, 170)
-    switchBg.BorderSizePixel = 0
-    switchBg.Parent = container
-    local bgCorner = Instance.new("UICorner")
-    bgCorner.CornerRadius = UDim.new(0, 14)
-    bgCorner.Parent = switchBg
-
-    local knob = Instance.new("Frame")
-    knob.Size = UDim2.new(0, 22, 0, 22)
-    knob.Position = default and UDim2.new(1, -26, 0.5, -11) or UDim2.new(0, 3, 0.5, -11)
-    knob.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
-    knob.BorderSizePixel = 0
-    knob.Parent = switchBg
-    local knobCorner = Instance.new("UICorner")
-    knobCorner.CornerRadius = UDim.new(0, 11)
-    knobCorner.Parent = knob
-
-    local state = default
-    local function updateSwitch()
-        switchBg.BackgroundColor3 = state and Color3.fromRGB(0, 200, 80) or Color3.fromRGB(150, 150, 170)
-        knob.Position = state and UDim2.new(1, -26, 0.5, -11) or UDim2.new(0, 3, 0.5, -11)
-    end
-
-    switchBg.InputBegan:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.MouseButton1 then
-            state = not state
-            updateSwitch()
-            if callback then callback(state) end
-        end
-    end)
-
-    return function() return state end
-end
-
--- ========== SLIDER ==========
-local function createSlider(parent, label, minV, maxV, defaultV, callback)
-    local container = Instance.new("Frame")
-    container.Size = UDim2.new(1, 0, 0, 55)
-    container.BackgroundTransparency = 1
-    container.Parent = parent
-
-    local lbl = Instance.new("TextLabel")
-    lbl.Size = UDim2.new(1, 0, 0.4, 0)
-    lbl.Text = label .. "  " .. tostring(defaultV) .. "s"
-    lbl.TextColor3 = Color3.fromRGB(235, 235, 245)
-    lbl.BackgroundTransparency = 1
-    lbl.Font = Enum.Font.Gotham
-    lbl.TextScaled = true
-    lbl.Parent = container
-
-    local sliderBg = Instance.new("Frame")
-    sliderBg.Size = UDim2.new(1, 0, 0.25, 0)
-    sliderBg.Position = UDim2.new(0, 0, 0.6, 0)
-    sliderBg.BackgroundColor3 = Color3.fromRGB(70, 70, 100)
-    sliderBg.BorderSizePixel = 0
-    sliderBg.Parent = container
-    local bgCorner = Instance.new("UICorner")
-    bgCorner.CornerRadius = UDim.new(0, 4)
-    bgCorner.Parent = sliderBg
-
-    local fill = Instance.new("Frame")
-    fill.Size = UDim2.new((defaultV - minV) / (maxV - minV), 0, 1, 0)
-    fill.BackgroundColor3 = Color3.fromRGB(0, 200, 255)
-    fill.BorderSizePixel = 0
-    fill.Parent = sliderBg
-    local fillCorner = Instance.new("UICorner")
-    fillCorner.CornerRadius = UDim.new(0, 4)
-    fillCorner.Parent = fill
-
-    local knob = Instance.new("ImageLabel")
-    knob.Size = UDim2.new(0, 18, 0, 18)
-    knob.Position = UDim2.new((defaultV - minV) / (maxV - minV), -9, 0.5, -9)
-    knob.Image = "rbxassetid://1409898100"
-    knob.ScaleType = Enum.ScaleType.Fit
-    knob.BackgroundTransparency = 1
-    knob.Parent = sliderBg
-
-    local val = defaultV
-    local dragging = false
-
-    local function update(input)
-        local pos = math.clamp((input.Position.X - sliderBg.AbsolutePosition.X) / sliderBg.AbsoluteSize.X, 0, 1)
-        val = minV + (maxV - minV) * pos
-        val = math.round(val * 10) / 10
-        fill.Size = UDim2.new(pos, 0, 1, 0)
-        knob.Position = UDim2.new(pos, -9, 0.5, -9)
-        lbl.Text = label .. "  " .. tostring(val) .. "s"
-        if callback then callback(val) end
-    end
-
-    sliderBg.InputBegan:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.MouseButton1 then
-            dragging = true
-            update(input)
-        end
-    end)
-    sliderBg.InputEnded:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.MouseButton1 then
-            dragging = false
-        end
-    end)
-    sliderBg.InputChanged:Connect(function(input)
-        if dragging and input.UserInputType == Enum.UserInputType.MouseMovement then
-            update(input)
-        end
-    end)
-
-    return function() return val end
-end
-
--- ===== MAIN TAB =====
-local mainTab = contentFrames["Main"]
-local autoState = false
-local afkState = false
-local intervalVal = 0.5
-
-local getAuto = createToggle(mainTab, "Auto Click", false, function(v) autoState = v end)
-local getInterval = createSlider(mainTab, "Interval", 0.1, 5.0, 0.5, function(v) intervalVal = v end)
-local spacer = Instance.new("Frame")
-spacer.Size = UDim2.new(1, 0, 0, 6)
-spacer.BackgroundTransparency = 1
-spacer.Parent = mainTab
-local getAfk = createToggle(mainTab, "Anti-AFK", false, function(v) afkState = v end)
-
--- ===== SETTINGS TAB =====
-local settingsTab = contentFrames["Settings"]
-
--- Anti-Lag toggle (đặt lên trên cùng)
-local lagState = false
-local getLag = createToggle(settingsTab, "Anti-Lag", false, function(v) lagState = v end)
-
--- FPS Counter – thiết kế lại hoàn toàn, xuống dòng, không bị loạn
-local fpsContainer = Instance.new("Frame")
-fpsContainer.Size = UDim2.new(1, 0, 0, 70)
-fpsContainer.Position = UDim2.new(0, 0, 0, 46) -- cách toggle một chút
-fpsContainer.BackgroundColor3 = Color3.fromRGB(35, 35, 50)
-fpsContainer.BorderSizePixel = 0
-fpsContainer.Parent = settingsTab
-local fpsCorner = Instance.new("UICorner")
-fpsCorner.CornerRadius = UDim.new(0, 8)
-fpsCorner.Parent = fpsContainer
-
--- Dòng 1: "FPS:" và số (nằm trên cùng)
-local fpsLabel1 = Instance.new("TextLabel")
-fpsLabel1.Size = UDim2.new(0.5, 0, 0.5, 0)
-fpsLabel1.Position = UDim2.new(0, 10, 0, 0)
-fpsLabel1.Text = "FPS:"
-fpsLabel1.TextColor3 = Color3.fromRGB(200, 200, 220)
-fpsLabel1.TextXAlignment = Enum.TextXAlignment.Left
-fpsLabel1.BackgroundTransparency = 1
-fpsLabel1.Font = Enum.Font.GothamBold
-fpsLabel1.TextSize = 18
-fpsLabel1.Parent = fpsContainer
-
-local fpsNumber = Instance.new("TextLabel")
-fpsNumber.Size = UDim2.new(0.5, 0, 0.5, 0)
-fpsNumber.Position = UDim2.new(0.5, 0, 0, 0)
-fpsNumber.Text = "0"
-fpsNumber.TextColor3 = Color3.fromRGB(0, 255, 200)
-fpsNumber.TextXAlignment = Enum.TextXAlignment.Left
-fpsNumber.BackgroundTransparency = 1
-fpsNumber.Font = Enum.Font.GothamBold
-fpsNumber.TextSize = 18
-fpsNumber.Parent = fpsContainer
-
--- Dòng 2: trạng thái (Perfect / Good / Laggy) – nằm dưới cùng
-local fpsStatus = Instance.new("TextLabel")
-fpsStatus.Size = UDim2.new(1, -20, 0.4, 0)
-fpsStatus.Position = UDim2.new(0, 10, 0.5, 0)
-fpsStatus.Text = "🟢 Perfect"
-fpsStatus.TextColor3 = Color3.fromRGB(0, 255, 100)
-fpsStatus.TextXAlignment = Enum.TextXAlignment.Left
-fpsStatus.BackgroundTransparency = 1
-fpsStatus.Font = Enum.Font.Gotham
-fpsStatus.TextSize = 16
-fpsStatus.Parent = fpsContainer
-
--- Cập nhật FPS mỗi giây (dùng Heartbeat đã có sẵn)
-RunService.Heartbeat:Connect(function()
-    local fps = fpsCounter.current
-    fpsNumber.Text = tostring(fps)
-    if fps >= 55 then
-        fpsStatus.Text = "🟢 Perfect"
-        fpsStatus.TextColor3 = Color3.fromRGB(0, 255, 100)
-    elseif fps >= 30 then
-        fpsStatus.Text = "🟡 Good"
-        fpsStatus.TextColor3 = Color3.fromRGB(255, 200, 0)
+local function ToggleAutoClick()
+    AutoClickEnabled = not AutoClickEnabled
+    if AutoClickEnabled then
+        AutoClickBtn.Text = "✅ Auto Click: ON"
+        AutoClickBtn.BackgroundColor3 = Color3.fromRGB(0, 150, 0)
+        print("🔄 [Oreo] Bật Auto Click (không tele)")
+        if ClickLoop then ClickLoop:Disconnect() end
+        ClickLoop = RunService.Heartbeat:Connect(function()
+            if AutoClickEnabled then
+                PerformClick()
+            else
+                ClickLoop:Disconnect()
+                ClickLoop = nil
+            end
+        end)
     else
-        fpsStatus.Text = "🔴 Laggy"
-        fpsStatus.TextColor3 = Color3.fromRGB(255, 50, 50)
-    end
-end)
-
--- ===== ABOUT TAB =====
-local aboutTab = contentFrames["About"]
-local about = Instance.new("TextLabel")
-about.Size = UDim2.new(1, 0, 1, 0)
-about.Text = "🍪 Oreo Hub v5.1\n\n• Auto Click chuột trái\n• Anti-AFK (Shift + mouse)\n• FPS Counter chính xác\n• Giao diện siêu đẹp\n\n💻 Credits: Solara ném scrip"
-about.TextColor3 = Color3.fromRGB(200, 200, 230)
-about.BackgroundTransparency = 1
-about.Font = Enum.Font.Gotham
-about.TextScaled = true
-about.TextWrapped = true
-about.Parent = aboutTab
-
--- ===== TAB SWITCHING =====
-local function switchTab(name)
-    for k, v in pairs(contentFrames) do
-        v.Visible = (k == name)
-        tabButtons[k].BackgroundColor3 = (k == name) and Color3.fromRGB(80, 80, 140) or Color3.fromRGB(60, 60, 85)
-        tabButtons[k].TextColor3 = (k == name) and Color3.fromRGB(255, 255, 255) or Color3.fromRGB(200, 200, 220)
+        AutoClickBtn.Text = "❌ Auto Click: OFF"
+        AutoClickBtn.BackgroundColor3 = Color3.fromRGB(60, 60, 65)
+        if ClickLoop then ClickLoop:Disconnect(); ClickLoop = nil end
+        print("⛔ [Oreo] Tắt Auto Click")
     end
 end
-for name, btn in pairs(tabButtons) do
-    btn.MouseButton1Click:Connect(function() switchTab(name) end)
-end
-switchTab("Main")
+AutoClickBtn.MouseButton1Click:Connect(ToggleAutoClick)
 
--- ===== CORE LOOPS =====
-local clickRunning, afkRunning = false, false
-local clickThread, afkThread
+-- 2. Nút Auto Tele (tự động tele sau 60s)
+local AutoTeleBtn = Instance.new("TextButton")
+AutoTeleBtn.Size = UDim2.new(0, 220, 0, 40)
+AutoTeleBtn.Position = UDim2.new(0.5, -110, 0, 60)
+AutoTeleBtn.BackgroundColor3 = Color3.fromRGB(60, 60, 65)
+AutoTeleBtn.Text = "⏳ Auto Tele (60s): OFF"
+AutoTeleBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+AutoTeleBtn.TextScaled = true
+AutoTeleBtn.Font = Enum.Font.Gotham
+AutoTeleBtn.BorderSizePixel = 0
+AutoTeleBtn.Parent = mainContent
 
-local function clickLoop()
-    while clickRunning do
-        if autoState then
-            performClick()
-            if lagState then wait(intervalVal) else wait(intervalVal) end
-        else
-            wait(0.1)
+local function ToggleAutoTele()
+    AutoTeleEnabled = not AutoTeleEnabled
+    if AutoTeleEnabled then
+        -- Lưu vị trí hiện tại khi bật
+        if not SaveCurrentPosition() then
+            AutoTeleEnabled = false
+            AutoTeleBtn.Text = "⏳ Auto Tele (60s): OFF"
+            AutoTeleBtn.BackgroundColor3 = Color3.fromRGB(60, 60, 65)
+            return
         end
+        AutoTeleBtn.Text = "✅ Auto Tele (60s): ON"
+        AutoTeleBtn.BackgroundColor3 = Color3.fromRGB(0, 150, 0)
+        AutoClickTimer = 0
+        print("🔄 [Oreo] Bật Auto Tele, sẽ tele sau 60 giây")
+        if TeleLoop then TeleLoop:Disconnect() end
+        TeleLoop = RunService.Heartbeat:Connect(function(deltaTime)
+            if not AutoTeleEnabled then
+                TeleLoop:Disconnect()
+                TeleLoop = nil
+                return
+            end
+            AutoClickTimer = AutoClickTimer + deltaTime
+            if AutoClickTimer >= TELEPORT_INTERVAL then
+                AutoClickTimer = 0
+                TeleportToSaved()
+            end
+        end)
+    else
+        AutoTeleBtn.Text = "⏳ Auto Tele (60s): OFF"
+        AutoTeleBtn.BackgroundColor3 = Color3.fromRGB(60, 60, 65)
+        if TeleLoop then TeleLoop:Disconnect(); TeleLoop = nil end
+        print("⛔ [Oreo] Tắt Auto Tele")
+        -- Không xóa vị trí đã lưu để dùng cho nút Tele ngay
     end
 end
+AutoTeleBtn.MouseButton1Click:Connect(ToggleAutoTele)
 
-local function afkLoop()
-    while afkRunning do
-        if afkState then
-            antiAfkAction()
-            wait(10)
-        else
-            wait(0.5)
-        end
-    end
-end
+-- 3. Nút Tele ngay
+local TeleNowBtn = Instance.new("TextButton")
+TeleNowBtn.Size = UDim2.new(0, 220, 0, 35)
+TeleNowBtn.Position = UDim2.new(0.5, -110, 0, 110)
+TeleNowBtn.BackgroundColor3 = Color3.fromRGB(70, 70, 80)
+TeleNowBtn.Text = "📌 Tele về vị trí (Phím Y)"
+TeleNowBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+TeleNowBtn.TextScaled = true
+TeleNowBtn.Font = Enum.Font.Gotham
+TeleNowBtn.BorderSizePixel = 0
+TeleNowBtn.Parent = mainContent
+TeleNowBtn.MouseButton1Click:Connect(TeleportToSaved)
 
-RunService.Heartbeat:Connect(function()
-    if autoState and not clickThread then
-        clickRunning = true
-        clickThread = coroutine.create(clickLoop)
-        coroutine.resume(clickThread)
-    elseif not autoState and clickThread then
-        clickRunning = false
-        clickThread = nil
-    end
+-- 4. Nút Lưu vị trí (thêm để tiện)
+local SavePosBtn = Instance.new("TextButton")
+SavePosBtn.Size = UDim2.new(0, 220, 0, 35)
+SavePosBtn.Position = UDim2.new(0.5, -110, 0, 155)
+SavePosBtn.BackgroundColor3 = Color3.fromRGB(70, 70, 80)
+SavePosBtn.Text = "💾 Lưu vị trí hiện tại"
+SavePosBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+SavePosBtn.TextScaled = true
+SavePosBtn.Font = Enum.Font.Gotham
+SavePosBtn.BorderSizePixel = 0
+SavePosBtn.Parent = mainContent
+SavePosBtn.MouseButton1Click:Connect(SaveCurrentPosition)
 
-    if afkState and not afkThread then
-        afkRunning = true
-        afkThread = coroutine.create(afkLoop)
-        coroutine.resume(afkThread)
-    elseif not afkState and afkThread then
-        afkRunning = false
-        afkThread = nil
-    end
-end)
-
--- ===== DRAG =====
-local dragging = false
-local dragStart, startPos
-main.InputBegan:Connect(function(input)
-    if input.UserInputType == Enum.UserInputType.MouseButton1 then
-        dragging = true
-        dragStart = input.Position
-        startPos = main.Position
-        input.Changed:Connect(function()
-            if input.UserInputState == Enum.UserInputState.End then dragging = false end
+-- 5. Anti-AFK
+local AntiAFKBtn = Instance.new("TextButton")
+AntiAFKBtn.Size = UDim2.new(0, 220, 0, 35)
+AntiAFKBtn.Position = UDim2.new(0.5, -110, 0, 200)
+AntiAFKBtn.BackgroundColor3 = Color3.fromRGB(60, 60, 65)
+AntiAFKBtn.Text = "❌ Anti-AFK: OFF"
+AntiAFKBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+AntiAFKBtn.TextScaled = true
+AntiAFKBtn.Font = Enum.Font.Gotham
+AntiAFKBtn.BorderSizePixel = 0
+AntiAFKBtn.Parent = mainContent
+AntiAFKBtn.MouseButton1Click:Connect(function()
+    AntiAFKEnabled = not AntiAFKEnabled
+    AntiAFKBtn.Text = AntiAFKEnabled and "✅ Anti-AFK: ON" or "❌ Anti-AFK: OFF"
+    AntiAFKBtn.BackgroundColor3 = AntiAFKEnabled and Color3.fromRGB(0, 150, 0) or Color3.fromRGB(60, 60, 65)
+    if AntiAFKEnabled then
+        game:GetService("RunService").Heartbeat:Connect(function()
+            if AntiAFKEnabled and Player.Character and Player.Character:FindFirstChild("Humanoid") then
+                Player.Character.Humanoid:Move(Vector3.new(0,0,0), true)
+            end
         end)
     end
 end)
-main.InputChanged:Connect(function(input)
+
+-- ================= SETTINGS TAB =================
+local settingsContent = ContentFrames["Settings"]
+local AntiLagBtn = Instance.new("TextButton")
+AntiLagBtn.Size = UDim2.new(0, 180, 0, 40)
+AntiLagBtn.Position = UDim2.new(0.5, -90, 0, 10)
+AntiLagBtn.BackgroundColor3 = Color3.fromRGB(60, 60, 65)
+AntiLagBtn.Text = "❌ Anti-Lag: OFF"
+AntiLagBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+AntiLagBtn.TextScaled = true
+AntiLagBtn.Font = Enum.Font.Gotham
+AntiLagBtn.BorderSizePixel = 0
+AntiLagBtn.Parent = settingsContent
+AntiLagBtn.MouseButton1Click:Connect(function()
+    AntiLagEnabled = not AntiLagEnabled
+    AntiLagBtn.Text = AntiLagEnabled and "✅ Anti-Lag: ON" or "❌ Anti-Lag: OFF"
+    AntiLagBtn.BackgroundColor3 = AntiLagEnabled and Color3.fromRGB(0, 150, 0) or Color3.fromRGB(60, 60, 65)
+end)
+
+-- ================= ABOUT TAB =================
+local aboutContent = ContentFrames["About"]
+local AboutLabel = Instance.new("TextLabel")
+AboutLabel.Size = UDim2.new(1, 0, 1, 0)
+AboutLabel.BackgroundTransparency = 1
+AboutLabel.Text = "🍪 Oreo Hub\nVer 3.0 - Click & Tele độc lập\nT: tắt Auto Click | Y: Tele ngay"
+AboutLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
+AboutLabel.TextScaled = true
+AboutLabel.Font = Enum.Font.Gotham
+AboutLabel.TextYAlignment = Enum.TextYAlignment.Top
+AboutLabel.Parent = aboutContent
+
+-- Kéo thả GUI
+local dragging = false
+local dragStart, startPos
+Title.InputBegan:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 then
+        dragging = true
+        dragStart = input.Position
+        startPos = MainFrame.Position
+    end
+end)
+Title.InputEnded:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 then
+        dragging = false
+    end
+end)
+UserInputService.InputChanged:Connect(function(input)
     if dragging and input.UserInputType == Enum.UserInputType.MouseMovement then
         local delta = input.Position - dragStart
-        main.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+        MainFrame.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
     end
 end)
 
--- ===== CLEANUP =====
-screenGui.AncestryChanged:Connect(function()
-    if not screenGui.Parent then
-        clickRunning = false; afkRunning = false
-        clickThread = nil; afkThread = nil
+-- ===== PHÍM TẮT =====
+UserInputService.InputBegan:Connect(function(input, gameProcessed)
+    if gameProcessed then return end
+    -- T: Tắt Auto Click
+    if input.KeyCode == Enum.KeyCode.T then
+        if AutoClickEnabled then
+            print("⌨️ [Oreo] Tắt Auto Click bằng phím T")
+            ToggleAutoClick()
+        end
+    end
+    -- Y: Tele ngay
+    if input.KeyCode == Enum.KeyCode.Y then
+        print("⌨️ [Oreo] Tele ngay bằng phím Y")
+        TeleportToSaved()
+    end
+    -- U: Bật/tắt Auto Tele (tiện lợi)
+    if input.KeyCode == Enum.KeyCode.U then
+        ToggleAutoTele()
     end
 end)
-
-print("🍪 Oreo Hub v5.1 loaded! FPS Counter fixed.")
