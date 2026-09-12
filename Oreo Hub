@@ -1,4 +1,4 @@
--[[
+--[[
     ============================================================
     🍪 OREO HUB v6.2 — Ultimate Edition
     ============================================================
@@ -2726,4 +2726,4 @@ end)
 -- INTRO
 -- ============================================================
 SwitchTab("Farm")
-Notify("Oreo Hub v6.2", "Loaded! Press RightCtrl to h
+Notify("Oreo Hub v6.2", "Loaded! Press RightCtrl to hide/show menu", "success", 5)
