@@ -1,343 +1,2729 @@
--- Services
-local Players = game:GetService("Players")
-local UserInputService = game:GetService("UserInputService")
-local RunService = game:GetService("RunService")
-local Player = Players.LocalPlayer
+-[[
+    ============================================================
+    🍪 OREO HUB v6.2 — Ultimate Edition
+    ============================================================
+    Author      : longne12345666
+    Version     : 6.2
+    Description : All-in-one Roblox utility hub with VIP key
+                  system, auto-farm, anti-cheat bypass, and
+                  modern glassmorphism UI.
+    License     : MIT (or your choice)
+    ============================================================
+]]
 
--- Variables
-local AutoClickEnabled = false       -- Bật/tắt click
-local AutoTeleEnabled = false        -- Bật/tắt tele tự động
-local AntiAFKEnabled = false
-local AntiLagEnabled = false
+-- ============================================================
+-- SERVICES
+-- ============================================================
+local Players            = game:GetService("Players")
+local UserInputService   = game:GetService("UserInputService")
+local RunService         = game:GetService("RunService")
+local TweenService       = game:GetService("TweenService")
+local VirtualInputManager= game:GetService("VirtualInputManager")
+local Lighting           = game:GetService("Lighting")
+local HttpService        = game:GetService("HttpService")
+local Player             = Players.LocalPlayer
 
--- Biến lưu vị trí
-local TeleStartPos = nil             -- Vị trí sẽ tele về
-local AutoClickTimer = 0             -- Đếm giây cho tele (nếu AutoTele bật)
-local TELEPORT_INTERVAL = 60         -- 60 giây
+-- ============================================================
+-- CONFIGURATION
+-- ============================================================
+local CONFIG = {
+    VIP_OWNER_USERNAME = "longne12345666",
+    KEY_PREFIX         = "OREO",
+    KEYS_FILE          = "oreo_hub_keys.json",
+    FARM_TELE_INTERVAL = 30,           -- seconds between auto-farm teleports
+    MAX_KEYS_PER_BATCH = 50,
+    FARM_STAKE_KEYWORD = "logtraining",-- target model name inside workspace.npc
+    FARM_NPC_FOLDER    = "npc",
+}
 
-local ClickLoop = nil                -- Kết nối vòng lặp click
-local TeleLoop = nil                 -- Kết nối vòng lặp tele
+-- Authorized creator secrets (used to generate keys)
+local CREATOR_SECRETS = {
+    ["BESTSYSTEMSHINDOLIFE"] = true,
+    ["CONNEMAY"]             = true,
+    ["OREO2024MASTER"]       = true,
+}
 
--- ===== HÀM CLICK (không tele) =====
-local function PerformClick()
-    local success, err = pcall(function()
-        local VIM = game:GetService("VirtualInputManager")
-        VIM:SendMouseButtonEvent(0, 0, 0, true, game, 0)
-        task.wait(0.03)
-        VIM:SendMouseButtonEvent(0, 0, 0, false, game, 0)
-    end)
-    if not success then
-        pcall(function() mouse1click() end)
-    end
+-- ============================================================
+-- THEME — Nebula Dark
+-- ============================================================
+local C = {
+    BG1      = Color3.fromRGB(10, 8, 20),
+    BG2      = Color3.fromRGB(18, 14, 32),
+    Glass    = Color3.fromRGB(28, 22, 46),
+    GlassHi  = Color3.fromRGB(38, 30, 60),
+    GlassLo  = Color3.fromRGB(22, 18, 38),
+
+    Primary  = Color3.fromRGB(160, 110, 255),
+    Primary2 = Color3.fromRGB(110, 180, 255),
+    Accent   = Color3.fromRGB(255, 130, 200),
+    Accent2  = Color3.fromRGB(120, 255, 200),
+    Gold     = Color3.fromRGB(255, 210, 90),
+    VIP      = Color3.fromRGB(255, 220, 130),
+
+    Success  = Color3.fromRGB(100, 240, 160),
+    Danger   = Color3.fromRGB(255, 100, 120),
+    Warn     = Color3.fromRGB(255, 190, 80),
+
+    Text     = Color3.fromRGB(245, 245, 255),
+    SubText  = Color3.fromRGB(160, 160, 190),
+    Muted    = Color3.fromRGB(90, 90, 120),
+    Stroke   = Color3.fromRGB(80, 70, 130),
+    StrokeHi = Color3.fromRGB(140, 120, 220),
+}
+
+-- ============================================================
+-- STATE
+-- ============================================================
+local State = {
+    -- Auto Farm
+    AutoFarm         = false,
+    FarmTimer        = 0,
+    FarmTeleTimer    = 0,
+    FarmStake        = nil,
+    FarmStakeModel   = nil,
+    FarmLockedStake  = nil,
+    FarmClickLoop    = nil,
+    FarmAimLoop      = nil,
+    FarmTeleLoop     = nil,
+
+    -- Auto Click / Tele / AFK
+    AutoClick        = false,
+    AutoTele         = false,
+    AntiAFK          = false,
+    ClickDelay       = 0.03,
+    TeleInterval     = 60,
+    TeleStartPos     = nil,
+    AutoClickTimer   = 0,
+    ClickLoop        = nil,
+    TeleLoop         = nil,
+    AFKLoop          = nil,
+
+    -- Click gate (prevents ghost clicks after stop)
+    ClickCancelled   = false,
+    StopCooldown     = 0,
+
+    -- Graphics
+    FastGraphics     = false,
+    FullBright       = false,
+    AntiLag          = false,
+    SavedVFX         = {},
+
+    -- VIP
+    IsVIP            = false,
+    VIPKey           = nil,
+    VIPExpiry        = 0,
+
+    -- Bypass
+    BypassV1         = false,
+    BypassV2         = false,
+    BypassLoops      = {},
+
+    -- Menu
+    MenuVisible      = true,
+    Minimized        = false,
+}
+
+-- Stores each toggle's apply() function so hotkeys can sync visuals
+local ToggleRefs = {}
+
+-- Backups for Lighting (restored when FullBright is turned off)
+local OriginalLighting = {
+    Brightness      = Lighting.Brightness,
+    ClockTime       = Lighting.ClockTime,
+    GlobalShadows   = Lighting.GlobalShadows,
+    FogEnd          = Lighting.FogEnd,
+    Ambient         = Lighting.Ambient,
+    OutdoorAmbient  = Lighting.OutdoorAmbient,
+}
+
+-- Forward declaration to avoid nil captures in button handlers
+local KeyGui
+
+-- External map: tab button -> accent bar (Roblox Instances cannot hold custom fields)
+local TabAccentMap = {}
+
+-- ============================================================
+-- HELPERS
+-- ============================================================
+local function Make(class, props, parent)
+    local obj = Instance.new(class)
+    for k, v in pairs(props or {}) do obj[k] = v end
+    if parent then obj.Parent = parent end
+    return obj
 end
 
--- ===== HÀM TELE VỀ VỊ TRÍ ĐÃ LƯU =====
-local function TeleportToSaved()
-    if not TeleStartPos then
-        print("⚠️ [Oreo] Chưa có vị trí lưu. Hãy bật Auto Tele hoặc dùng 'Lưu vị trí'.")
-        return false
+local function Corner(p, radius)
+    return Make("UICorner", {CornerRadius = UDim.new(0, radius or 10)}, p)
+end
+
+local function Stroke(p, color, thickness, transparency)
+    return Make("UIStroke", {
+        Color          = color or C.Stroke,
+        Thickness      = thickness or 1,
+        Transparency   = transparency or 0.4,
+        ApplyStrokeMode= Enum.ApplyStrokeMode.Border,
+    }, p)
+end
+
+local function Gradient(p, c1, c2, rotation)
+    return Make("UIGradient", {
+        Color    = ColorSequence.new(c1, c2),
+        Rotation = rotation or 0,
+    }, p)
+end
+
+local function Tween(obj, time, props, style, dir)
+    local t = TweenService:Create(obj, TweenInfo.new(
+        time or 0.25,
+        style or Enum.EasingStyle.Quint,
+        dir or Enum.EasingDirection.Out
+    ), props)
+    t:Play()
+    return t
+end
+
+local function FormatTime(seconds)
+    seconds = math.floor(seconds)
+    return string.format("%02d:%02d:%02d",
+        math.floor(seconds / 3600),
+        math.floor((seconds % 3600) / 60),
+        seconds % 60)
+end
+
+local function FormatRemaining(seconds)
+    if seconds <= 0 then return "EXPIRED" end
+    local d = math.floor(seconds / 86400)
+    local h = math.floor((seconds % 86400) / 3600)
+    local m = math.floor((seconds % 3600) / 60)
+    local s = seconds % 60
+    if d > 0 then return string.format("%dd %dh %dm", d, h, m) end
+    if h > 0 then return string.format("%dh %dm %ds", h, m, s) end
+    if m > 0 then return string.format("%dm %ds", m, s) end
+    return string.format("%ds", s)
+end
+
+-- Parse duration strings like "1h", "30p", "45s", "2d", "7m"
+-- s = seconds, p = minutes, h = hours, d = days, m = months (30 days)
+local function ParseDuration(str)
+    if not str or str == "" then return nil end
+    str = str:lower():gsub("%s", "")
+    local num, unit = str:match("^(%d+)([sp hdm])$")
+    if not num then return nil end
+    num = tonumber(num)
+    if unit == "s" then return num
+    elseif unit == "p" then return num * 60
+    elseif unit == "h" then return num * 3600
+    elseif unit == "d" then return num * 86400
+    elseif unit == "m" then return num * 30 * 86400 end
+    return nil
+end
+
+local function RandomHex(n)
+    local s = ""
+    for _ = 1, n do
+        s = s .. string.format("%X", math.random(0, 15))
     end
-    local char = Player.Character
-    if not char then
-        print("❌ [Oreo] Không tìm thấy nhân vật.")
-        return false
-    end
-    local hrp = char:FindFirstChild("HumanoidRootPart")
-    if not hrp then
-        print("❌ [Oreo] Không tìm thấy HumanoidRootPart.")
-        return false
-    end
-    
-    -- Thử tele CFrame
-    local success, err = pcall(function()
-        hrp.CFrame = CFrame.new(TeleStartPos + Vector3.new(0, 2, 0))
-    end)
-    if success then
-        print("✅ [Oreo] Tele về vị trí: " .. tostring(TeleStartPos))
-        return true
-    else
-        print("❌ [Oreo] Tele thất bại: " .. tostring(err) .. " → thử dùng MoveTo")
-        local humanoid = char:FindFirstChild("Humanoid")
-        if humanoid then
-            humanoid:MoveTo(TeleStartPos)
-            return true
+    return s
+end
+
+local function GenerateKey()
+    return string.format("%s-%s-%s-%s",
+        CONFIG.KEY_PREFIX, RandomHex(4), RandomHex(4), RandomHex(4))
+end
+
+-- ============================================================
+-- KEY STORAGE (persists via executor writefile/readfile if available)
+-- ============================================================
+local KeyStore = {}
+
+local function SaveKeys()
+    pcall(function()
+        if writefile then
+            writefile(CONFIG.KEYS_FILE, HttpService:JSONEncode(KeyStore))
         end
-        return false
+    end)
+end
+
+local function LoadKeys()
+    pcall(function()
+        if isfile and isfile(CONFIG.KEYS_FILE) then
+            KeyStore = HttpService:JSONDecode(readfile(CONFIG.KEYS_FILE)) or {}
+        end
+    end)
+end
+
+LoadKeys()
+
+-- ============================================================
+-- SCREEN GUI
+-- ============================================================
+local ScreenGui = Make("ScreenGui", {
+    Name              = "OreoHubV6",
+    ResetOnSpawn      = false,
+    ZIndexBehavior    = Enum.ZIndexBehavior.Sibling,
+    IgnoreGuiInset    = true,
+    Parent            = Player:WaitForChild("PlayerGui"),
+})
+
+-- ============================================================
+-- NOTIFICATION SYSTEM
+-- ============================================================
+local NotifHolder = Make("Frame", {
+    Size                  = UDim2.new(0, 340, 1, -40),
+    Position              = UDim2.new(1, -360, 0, 20),
+    BackgroundTransparency= 1,
+    Parent                = ScreenGui,
+})
+
+local function Notify(title, message, kind, life)
+    kind = kind or "info"
+    local color = C.Primary
+    if kind == "success" then color = C.Success
+    elseif kind == "error" then color = C.Danger
+    elseif kind == "warn" then color = C.Warn
+    elseif kind == "vip" then color = C.VIP end
+
+    local card = Make("Frame", {
+        Size             = UDim2.new(1, 0, 0, 68),
+        Position         = UDim2.new(1, 420, 0, 0),
+        BackgroundColor3 = C.Glass,
+        BorderSizePixel  = 0,
+        Parent           = NotifHolder,
+    })
+    Corner(card, 12)
+    Stroke(card, color, 1.6, 0.35)
+    Gradient(card, C.GlassHi, C.GlassLo, 55)
+
+    local accent = Make("Frame", {
+        Size             = UDim2.new(0, 4, 1, -18),
+        Position         = UDim2.new(0, 8, 0, 9),
+        BackgroundColor3 = color,
+        BorderSizePixel  = 0,
+        Parent           = card,
+    })
+    Corner(accent, 2)
+
+    Make("TextLabel", {
+        Size              = UDim2.new(1, -30, 0, 22),
+        Position          = UDim2.new(0, 22, 0, 10),
+        BackgroundTransparency = 1,
+        Text              = title,
+        TextColor3        = C.Text,
+        TextXAlignment    = Enum.TextXAlignment.Left,
+        Font              = Enum.Font.GothamBold,
+        TextSize          = 15,
+        Parent            = card,
+    })
+    Make("TextLabel", {
+        Size              = UDim2.new(1, -30, 0, 26),
+        Position          = UDim2.new(0, 22, 0, 32),
+        BackgroundTransparency = 1,
+        Text              = message,
+        TextColor3        = C.SubText,
+        TextXAlignment    = Enum.TextXAlignment.Left,
+        TextWrapped       = true,
+        Font              = Enum.Font.Gotham,
+        TextSize          = 12,
+        Parent            = card,
+    })
+
+    local count = 0
+    for _, c in ipairs(NotifHolder:GetChildren()) do
+        if c:IsA("Frame") and c ~= card then count += 1 end
+    end
+    card.Position = UDim2.new(1, 420, 0, count * 76)
+    Tween(card, 0.45, {Position = UDim2.new(0, 0, 0, count * 76)}, Enum.EasingStyle.Back)
+
+    task.delay(life or 3.5, function()
+        if not card.Parent then return end
+        Tween(card, 0.35, {Position = UDim2.new(1, 420, 0, card.Position.Y.Offset)},
+            Enum.EasingStyle.Quad, Enum.EasingDirection.In)
+        task.wait(0.4)
+        card:Destroy()
+
+        local i = 0
+        for _, c in ipairs(NotifHolder:GetChildren()) do
+            if c:IsA("Frame") then
+                Tween(c, 0.25, {Position = UDim2.new(0, 0, 0, i * 76)})
+                i += 1
+            end
+        end
+    end)
+end
+
+-- ============================================================
+-- CORE CLICK SYSTEM
+-- ============================================================
+local function PerformClick()
+    if State.ClickCancelled then return end
+    local ok = pcall(function()
+        if State.ClickCancelled then return end
+        VirtualInputManager:SendMouseButtonEvent(0, 0, 0, true, game, 0)
+        task.wait(State.ClickDelay)
+        if State.ClickCancelled then
+            pcall(function()
+                VirtualInputManager:SendMouseButtonEvent(0, 0, 0, false, game, 0)
+            end)
+            return
+        end
+        VirtualInputManager:SendMouseButtonEvent(0, 0, 0, false, game, 0)
+    end)
+    if not ok and not State.ClickCancelled then
+        pcall(function()
+            if not State.ClickCancelled then mouse1click() end
+        end)
     end
 end
 
--- ===== HÀM LƯU VỊ TRÍ HIỆN TẠI =====
-local function SaveCurrentPosition()
-    local char = Player.Character
-    if not char or not char:FindFirstChild("HumanoidRootPart") then
-        print("❌ [Oreo] Không thể lưu vị trí – nhân vật chưa sẵn sàng.")
-        return false
-    end
-    TeleStartPos = char.HumanoidRootPart.Position
-    print("📍 [Oreo] Đã lưu vị trí: " .. tostring(TeleStartPos))
+local function CanClick()
+    if State.ClickCancelled then return false end
+    if State.StopCooldown > os.clock() then return false end
     return true
 end
 
--- ===== TẠO GUI =====
-local ScreenGui = Instance.new("ScreenGui")
-ScreenGui.Name = "OreoHubGUI"
-ScreenGui.Parent = Player:WaitForChild("PlayerGui")
+-- ============================================================
+-- TELEPORT UTILITIES
+-- ============================================================
+local function SavePosition()
+    local char = Player.Character
+    if not char or not char:FindFirstChild("HumanoidRootPart") then
+        Notify("Cannot Save", "Character not ready", "error")
+        return false
+    end
+    State.TeleStartPos = char.HumanoidRootPart.Position
+    Notify("Position Saved", string.format("(%.1f, %.1f, %.1f)",
+        State.TeleStartPos.X, State.TeleStartPos.Y, State.TeleStartPos.Z), "success")
+    return true
+end
 
-local MainFrame = Instance.new("Frame")
-MainFrame.Size = UDim2.new(0, 420, 0, 380)
-MainFrame.Position = UDim2.new(0.5, -210, 0.5, -190)
-MainFrame.BackgroundColor3 = Color3.fromRGB(30, 30, 35)
-MainFrame.BorderSizePixel = 0
-MainFrame.Parent = ScreenGui
+local function TeleportToSaved()
+    if not State.TeleStartPos then
+        Notify("No Position", "Save a position first", "warn")
+        return false
+    end
+    local char = Player.Character
+    if not char then return false end
+    local hrp = char:FindFirstChild("HumanoidRootPart")
+    if not hrp then return false end
 
-local Title = Instance.new("TextLabel")
-Title.Size = UDim2.new(1, 0, 0, 30)
-Title.BackgroundColor3 = Color3.fromRGB(20, 20, 25)
-Title.Text = "🍪 Oreo Hub"
-Title.TextColor3 = Color3.fromRGB(255, 255, 255)
-Title.TextScaled = true
-Title.Font = Enum.Font.GothamBold
-Title.Parent = MainFrame
+    local ok = pcall(function()
+        hrp.CFrame = CFrame.new(State.TeleStartPos + Vector3.new(0, 2, 0))
+    end)
+    if ok then
+        Notify("Teleported", "Back to saved position", "success")
+        return true
+    end
+    local hum = char:FindFirstChildOfClass("Humanoid")
+    if hum then hum:MoveTo(State.TeleStartPos); return true end
+    return false
+end
 
--- Tabs
-local Tabs = {"Main", "Settings", "About"}
-local TabButtons = {}
-local ContentFrames = {}
+-- ============================================================
+-- GRAPHICS OPTIMIZATION
+-- ============================================================
+local function ApplyFastGraphics(on)
+    if on then
+        pcall(function()
+            settings().Rendering.QualityLevel = Enum.QualityLevel.Level01
+        end)
+        State.SavedVFX = {}
+        for _, v in ipairs(game:GetDescendants()) do
+            if v:IsA("ParticleEmitter") or v:IsA("Trail") or v:IsA("Smoke")
+                or v:IsA("Fire") or v:IsA("Sparkles") then
+                State.SavedVFX[v] = v.Enabled
+                v.Enabled = false
+            elseif v:IsA("Decal") or v:IsA("Texture") then
+                State.SavedVFX[v] = v.Transparency
+                v.Transparency = 1
+            end
+        end
+        Notify("Fast Graphics", "FPS boost ON", "success")
+    else
+        pcall(function()
+            settings().Rendering.QualityLevel = Enum.QualityLevel.Automatic
+        end)
+        for obj, val in pairs(State.SavedVFX) do
+            if obj and obj.Parent then
+                pcall(function() obj.Enabled = val end)
+                pcall(function() obj.Transparency = val end)
+            end
+        end
+        State.SavedVFX = {}
+        Notify("Fast Graphics", "OFF", "warn")
+    end
+end
 
-for i, tabName in ipairs(Tabs) do
-    local btn = Instance.new("TextButton")
-    btn.Size = UDim2.new(0, 130, 0, 30)
-    btn.Position = UDim2.new(0, 5 + ((i-1) * 135), 0, 35)
-    btn.BackgroundColor3 = Color3.fromRGB(50, 50, 55)
-    btn.Text = tabName
-    btn.TextColor3 = Color3.fromRGB(255, 255, 255)
-    btn.TextScaled = true
-    btn.Font = Enum.Font.Gotham
-    btn.BorderSizePixel = 0
-    btn.Parent = MainFrame
-    TabButtons[tabName] = btn
+local function ApplyFullBright(on)
+    if on then
+        Lighting.Brightness     = 3
+        Lighting.ClockTime      = 14
+        Lighting.GlobalShadows  = false
+        Lighting.FogEnd         = 1e6
+        Lighting.Ambient        = Color3.fromRGB(200, 200, 200)
+        Lighting.OutdoorAmbient = Color3.fromRGB(200, 200, 200)
+        for _, v in ipairs(Lighting:GetChildren()) do
+            if v:IsA("Atmosphere") or v:IsA("BlurEffect") or v:IsA("ColorCorrectionEffect") then
+                v.Enabled = false
+            end
+        end
+        Notify("Full Bright", "ON", "success")
+    else
+        Lighting.Brightness     = OriginalLighting.Brightness
+        Lighting.ClockTime      = OriginalLighting.ClockTime
+        Lighting.GlobalShadows  = OriginalLighting.GlobalShadows
+        Lighting.FogEnd         = OriginalLighting.FogEnd
+        Lighting.Ambient        = OriginalLighting.Ambient
+        Lighting.OutdoorAmbient = OriginalLighting.OutdoorAmbient
+        Notify("Full Bright", "OFF", "warn")
+    end
+end
 
-    local content = Instance.new("Frame")
-    content.Size = UDim2.new(1, -10, 1, -75)
-    content.Position = UDim2.new(0, 5, 0, 70)
-    content.BackgroundTransparency = 1
-    content.Visible = (tabName == "Main")
-    content.Parent = MainFrame
-    ContentFrames[tabName] = content
+-- ============================================================
+-- ANTI-CHEAT BYPASS
+-- ============================================================
+local function StartBypassV1()
+    if State.BypassLoops.v1 then return end
+    Notify("Bypass V1", "Normal bypass ON", "success")
 
-    btn.MouseButton1Click:Connect(function()
-        for _, frame in pairs(ContentFrames) do frame.Visible = false end
-        ContentFrames[tabName].Visible = true
+    local patterns = {
+        "anticheat", "anti_cheat", "ac_", "_ac",
+        "kac", "hyperion", "byfron", "bansystem", "detector"
+    }
+    for _, obj in ipairs(game:GetDescendants()) do
+        if obj:IsA("Script") or obj:IsA("LocalScript") or obj:IsA("ModuleScript") then
+            local name = obj.Name:lower()
+            for _, pat in ipairs(patterns) do
+                if name:find(pat) then
+                    pcall(function() obj.Parent = nil end)
+                    break
+                end
+            end
+        end
+    end
+
+    State.BypassLoops.v1 = RunService.Heartbeat:Connect(function()
+        if not State.BypassV1 then return end
     end)
 end
 
--- ================= MAIN TAB =================
-local mainContent = ContentFrames["Main"]
+local function StopBypassV1()
+    if State.BypassLoops.v1 then
+        State.BypassLoops.v1:Disconnect()
+        State.BypassLoops.v1 = nil
+    end
+    Notify("Bypass V1", "OFF", "warn")
+end
 
--- 1. Nút Auto Click (chỉ click, không tele)
-local AutoClickBtn = Instance.new("TextButton")
-AutoClickBtn.Size = UDim2.new(0, 220, 0, 40)
-AutoClickBtn.Position = UDim2.new(0.5, -110, 0, 10)
-AutoClickBtn.BackgroundColor3 = Color3.fromRGB(60, 60, 65)
-AutoClickBtn.Text = "❌ Auto Click: OFF"
-AutoClickBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-AutoClickBtn.TextScaled = true
-AutoClickBtn.Font = Enum.Font.Gotham
-AutoClickBtn.BorderSizePixel = 0
-AutoClickBtn.Parent = mainContent
+local function StartBypassV2()
+    if not State.IsVIP then
+        Notify("Bypass V2", "VIP key required!", "error")
+        return
+    end
+    if State.BypassLoops.v2 then return end
+    Notify("Bypass V2 ⭐", "100% VIP bypass ON", "vip")
 
-local function ToggleAutoClick()
-    AutoClickEnabled = not AutoClickEnabled
-    if AutoClickEnabled then
-        AutoClickBtn.Text = "✅ Auto Click: ON"
-        AutoClickBtn.BackgroundColor3 = Color3.fromRGB(0, 150, 0)
-        print("🔄 [Oreo] Bật Auto Click (không tele)")
-        if ClickLoop then ClickLoop:Disconnect() end
-        ClickLoop = RunService.Heartbeat:Connect(function()
-            if AutoClickEnabled then
-                PerformClick()
-            else
-                ClickLoop:Disconnect()
-                ClickLoop = nil
+    StartBypassV1()
+
+    State.BypassLoops.v2 = RunService.Heartbeat:Connect(function()
+        if not State.BypassV2 or not State.IsVIP then return end
+        local char = Player.Character
+        if not char then return end
+        local hrp = char:FindFirstChild("HumanoidRootPart")
+        if not hrp then return end
+
+        if State.AutoFarm then
+            pcall(function()
+                hrp.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
+                hrp.AssemblyAngularVelocity= Vector3.new(0, 0, 0)
+            end)
+        end
+    end)
+
+    workspace.DescendantAdded:Connect(function(obj)
+        if not State.BypassV2 then return end
+        if obj:IsA("Script") or obj:IsA("LocalScript") then
+            local n = obj.Name:lower()
+            if n:find("anticheat") or n:find("detector") or n:find("ac_") then
+                pcall(function() obj.Enabled = false end)
+                pcall(function() obj.Parent = nil end)
             end
-        end)
-    else
-        AutoClickBtn.Text = "❌ Auto Click: OFF"
-        AutoClickBtn.BackgroundColor3 = Color3.fromRGB(60, 60, 65)
-        if ClickLoop then ClickLoop:Disconnect(); ClickLoop = nil end
-        print("⛔ [Oreo] Tắt Auto Click")
+        end
+    end)
+end
+
+local function StopBypassV2()
+    if State.BypassLoops.v2 then
+        State.BypassLoops.v2:Disconnect()
+        State.BypassLoops.v2 = nil
+    end
+    StopBypassV1()
+    Notify("Bypass V2", "VIP bypass OFF", "warn")
+end
+
+-- ============================================================
+-- AUTO FARM SYSTEM
+-- ============================================================
+local FarmStickyNotif, FarmHUD, FarmTimeLbl, FarmNextTeleLbl = nil, nil, nil, nil
+
+local function FindNearestStake(maxDist)
+    maxDist = maxDist or 3000
+    local char = Player.Character
+    if not char or not char:FindFirstChild("HumanoidRootPart") then return nil, nil end
+
+    local myPos = char.HumanoidRootPart.Position
+    local npcFolder = workspace:FindFirstChild(CONFIG.FARM_NPC_FOLDER)
+    if not npcFolder then return nil, nil end
+
+    local bestPart, bestModel, bestDist = nil, nil, maxDist
+    for _, obj in ipairs(npcFolder:GetDescendants()) do
+        if obj:IsA("Model") and obj.Name:lower():find(CONFIG.FARM_STAKE_KEYWORD) then
+            local root = obj:FindFirstChild("HumanoidRootPart")
+                or obj:FindFirstChild("Torso")
+                or obj:FindFirstChildWhichIsA("BasePart", true)
+            if root then
+                local d = (root.Position - myPos).Magnitude
+                if d < bestDist then
+                    bestDist, bestPart, bestModel = d, root, obj
+                end
+            end
+        elseif obj:IsA("BasePart") and obj.Name:lower():find(CONFIG.FARM_STAKE_KEYWORD) then
+            local d = (obj.Position - myPos).Magnitude
+            if d < bestDist then
+                bestDist, bestPart = d, obj
+                bestModel = obj:FindFirstAncestorOfClass("Model") or obj
+            end
+        end
+    end
+    return bestPart, bestModel
+end
+
+local function ShowStickyFarmNotif()
+    if FarmStickyNotif and FarmStickyNotif.Parent then return end
+
+    local frame = Make("Frame", {
+        Size             = UDim2.new(0, 300, 0, 48),
+        Position         = UDim2.new(0.5, -150, 0, -60),
+        BackgroundColor3 = C.Glass,
+        BorderSizePixel  = 0,
+        ZIndex           = 50,
+        Parent           = ScreenGui,
+    })
+    Corner(frame, 14)
+    Stroke(frame, C.Success, 1.8, 0.15)
+    Gradient(frame, C.Success, Color3.fromRGB(40, 180, 120), 55)
+
+    local lbl = Make("TextLabel", {
+        Size              = UDim2.new(1, -20, 1, 0),
+        Position          = UDim2.new(0, 10, 0, 0),
+        BackgroundTransparency = 1,
+        Text              = "🌾 AUTO FARM  •  Press F2 To Stop",
+        TextColor3        = Color3.new(1, 1, 1),
+        Font              = Enum.Font.GothamBold,
+        TextSize          = 13,
+        ZIndex            = 51,
+        Parent            = frame,
+    })
+
+    task.spawn(function()
+        while frame.Parent do
+            Tween(lbl, 0.7, {TextTransparency = 0.4}, Enum.EasingStyle.Sine)
+            task.wait(0.7)
+            Tween(lbl, 0.7, {TextTransparency = 0}, Enum.EasingStyle.Sine)
+            task.wait(0.7)
+        end
+    end)
+
+    Tween(frame, 0.5, {Position = UDim2.new(0.5, -150, 0, 24)}, Enum.EasingStyle.Back)
+    FarmStickyNotif = frame
+end
+
+local function HideStickyFarmNotif()
+    if FarmStickyNotif and FarmStickyNotif.Parent then
+        local f = FarmStickyNotif
+        FarmStickyNotif = nil
+        Tween(f, 0.35, {Position = UDim2.new(0.5, -150, 0, -70)},
+            Enum.EasingStyle.Quad, Enum.EasingDirection.In)
+        task.wait(0.4)
+        f:Destroy()
     end
 end
-AutoClickBtn.MouseButton1Click:Connect(ToggleAutoClick)
 
--- 2. Nút Auto Tele (tự động tele sau 60s)
-local AutoTeleBtn = Instance.new("TextButton")
-AutoTeleBtn.Size = UDim2.new(0, 220, 0, 40)
-AutoTeleBtn.Position = UDim2.new(0.5, -110, 0, 60)
-AutoTeleBtn.BackgroundColor3 = Color3.fromRGB(60, 60, 65)
-AutoTeleBtn.Text = "⏳ Auto Tele (60s): OFF"
-AutoTeleBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-AutoTeleBtn.TextScaled = true
-AutoTeleBtn.Font = Enum.Font.Gotham
-AutoTeleBtn.BorderSizePixel = 0
-AutoTeleBtn.Parent = mainContent
+local function ShowFarmHUD()
+    if FarmHUD and FarmHUD.Parent then return end
 
-local function ToggleAutoTele()
-    AutoTeleEnabled = not AutoTeleEnabled
-    if AutoTeleEnabled then
-        -- Lưu vị trí hiện tại khi bật
-        if not SaveCurrentPosition() then
-            AutoTeleEnabled = false
-            AutoTeleBtn.Text = "⏳ Auto Tele (60s): OFF"
-            AutoTeleBtn.BackgroundColor3 = Color3.fromRGB(60, 60, 65)
+    local hud = Make("Frame", {
+        Size             = UDim2.new(0, 250, 0, 175),
+        Position         = UDim2.new(1, 280, 0, 110),
+        BackgroundColor3 = C.BG1,
+        BorderSizePixel  = 0,
+        ZIndex           = 40,
+        Parent           = ScreenGui,
+    })
+    Corner(hud, 16)
+    Stroke(hud, C.Success, 2, 0.1)
+    Gradient(hud, C.GlassHi, C.BG1, 55)
+
+    local titleBar = Make("Frame", {
+        Size             = UDim2.new(1, 0, 0, 34),
+        BackgroundColor3 = C.Success,
+        BorderSizePixel  = 0,
+        ZIndex           = 41,
+        Parent           = hud,
+    })
+    Corner(titleBar, 16)
+    Make("Frame", {
+        Size             = UDim2.new(1, 0, 0, 17),
+        Position         = UDim2.new(0, 0, 1, -17),
+        BackgroundColor3 = C.Success,
+        BorderSizePixel  = 0,
+        ZIndex           = 41,
+        Parent           = titleBar,
+    })
+    Make("TextLabel", {
+        Size              = UDim2.new(1, -20, 1, 0),
+        Position          = UDim2.new(0, 12, 0, 0),
+        BackgroundTransparency = 1,
+        Text              = "🌾  AUTO FARM ACTIVE",
+        TextColor3        = Color3.new(1, 1, 1),
+        Font              = Enum.Font.GothamBlack,
+        TextSize          = 14,
+        TextXAlignment    = Enum.TextXAlignment.Left,
+        ZIndex            = 42,
+        Parent            = titleBar,
+    })
+
+    local dot = Make("Frame", {
+        Size             = UDim2.new(0, 10, 0, 10),
+        Position         = UDim2.new(1, -22, 0.5, -5),
+        BackgroundColor3 = Color3.new(1, 1, 1),
+        BorderSizePixel  = 0,
+        ZIndex           = 42,
+        Parent           = titleBar,
+    })
+    Corner(dot, 5)
+    task.spawn(function()
+        while dot.Parent do
+            Tween(dot, 0.5, {BackgroundTransparency = 0.7}, Enum.EasingStyle.Sine)
+            task.wait(0.5)
+            Tween(dot, 0.5, {BackgroundTransparency = 0}, Enum.EasingStyle.Sine)
+            task.wait(0.5)
+        end
+    end)
+
+    Make("TextLabel", {
+        Size              = UDim2.new(0.5, -12, 0, 14),
+        Position          = UDim2.new(0, 12, 0, 42),
+        BackgroundTransparency = 1,
+        Text              = "ELAPSED",
+        TextColor3        = C.SubText,
+        Font              = Enum.Font.GothamBold,
+        TextSize          = 10,
+        TextXAlignment    = Enum.TextXAlignment.Left,
+        ZIndex            = 41,
+        Parent            = hud,
+    })
+    Make("TextLabel", {
+        Size              = UDim2.new(0.5, -12, 0, 14),
+        Position          = UDim2.new(0.5, 0, 0, 42),
+        BackgroundTransparency = 1,
+        Text              = "NEXT TELE",
+        TextColor3        = C.SubText,
+        Font              = Enum.Font.GothamBold,
+        TextSize          = 10,
+        TextXAlignment    = Enum.TextXAlignment.Left,
+        ZIndex            = 41,
+        Parent            = hud,
+    })
+
+    local timeLbl = Make("TextLabel", {
+        Size              = UDim2.new(0.5, -12, 0, 28),
+        Position          = UDim2.new(0, 12, 0, 56),
+        BackgroundTransparency = 1,
+        Text              = "00:00:00",
+        TextColor3        = C.Success,
+        Font              = Enum.Font.Code,
+        TextSize          = 20,
+        TextXAlignment    = Enum.TextXAlignment.Left,
+        ZIndex            = 41,
+        Parent            = hud,
+    })
+    Gradient(timeLbl, C.Success, C.Accent2, 0)
+    FarmTimeLbl = timeLbl
+
+    local nextTeleLbl = Make("TextLabel", {
+        Size              = UDim2.new(0.5, -12, 0, 28),
+        Position          = UDim2.new(0.5, 0, 0, 56),
+        BackgroundTransparency = 1,
+        Text              = tostring(CONFIG.FARM_TELE_INTERVAL) .. "s",
+        TextColor3        = C.Primary2,
+        Font              = Enum.Font.Code,
+        TextSize          = 20,
+        TextXAlignment    = Enum.TextXAlignment.Left,
+        ZIndex            = 41,
+        Parent            = hud,
+    })
+    Gradient(nextTeleLbl, C.Primary2, C.Accent, 0)
+    FarmNextTeleLbl = nextTeleLbl
+
+    _G.FarmHUDInfoLbl = Make("TextLabel", {
+        Size              = UDim2.new(1, -24, 0, 20),
+        Position          = UDim2.new(0, 12, 0, 90),
+        BackgroundTransparency = 1,
+        Text              = "🎯 Target: searching...",
+        TextColor3        = C.SubText,
+        Font              = Enum.Font.Gotham,
+        TextSize          = 11,
+        TextXAlignment    = Enum.TextXAlignment.Left,
+        ZIndex            = 41,
+        Parent            = hud,
+    })
+
+    local stopBtn = Make("TextButton", {
+        Size             = UDim2.new(1, -24, 0, 36),
+        Position         = UDim2.new(0, 12, 1, -48),
+        BackgroundColor3 = C.Danger,
+        BorderSizePixel  = 0,
+        Text             = "⏹   STOP FARM",
+        TextColor3       = Color3.new(1, 1, 1),
+        Font             = Enum.Font.GothamBlack,
+        TextSize         = 13,
+        AutoButtonColor  = false,
+        ZIndex           = 41,
+        Parent           = hud,
+    })
+    Corner(stopBtn, 10)
+    Gradient(stopBtn, C.Danger, Color3.fromRGB(180, 40, 60), 45)
+    stopBtn.MouseButton1Click:Connect(function() StopAutoFarm(true) end)
+
+    Tween(hud, 0.5, {Position = UDim2.new(1, -270, 0, 110)}, Enum.EasingStyle.Back)
+    FarmHUD = hud
+end
+
+local function HideFarmHUD()
+    if FarmHUD and FarmHUD.Parent then
+        local h = FarmHUD
+        FarmHUD = nil
+        FarmTimeLbl = nil
+        FarmNextTeleLbl = nil
+        Tween(h, 0.35, {Position = UDim2.new(1, 280, 0, 110)},
+            Enum.EasingStyle.Quad, Enum.EasingDirection.In)
+        task.wait(0.4)
+        h:Destroy()
+    end
+end
+
+local function LockAndStick()
+    local char = Player.Character
+    if not char then return false end
+    local hrp = char:FindFirstChild("HumanoidRootPart")
+    if not hrp then return false end
+
+    if not State.FarmStake or not State.FarmStake.Parent then
+        local part, model = FindNearestStake()
+        if not part then
+            Notify("Auto Farm", "No " .. CONFIG.FARM_STAKE_KEYWORD .. " found in workspace." .. CONFIG.FARM_NPC_FOLDER, "error")
+            return false
+        end
+        State.FarmStake       = part
+        State.FarmStakeModel  = model
+        State.FarmLockedStake = model
+        Notify("Auto Farm", "🔒 Locked: " .. (model and model.Name or part.Name), "success")
+    end
+
+    local stakePos  = State.FarmStake.Position
+    local targetPos = stakePos + Vector3.new(0, 2, 2)
+
+    local ok = pcall(function()
+        hrp.CFrame = CFrame.lookAt(targetPos, stakePos + Vector3.new(0, 1, 0))
+        hrp.AssemblyLinearVelocity  = Vector3.new(0, 0, 0)
+        hrp.AssemblyAngularVelocity = Vector3.new(0, 0, 0)
+    end)
+    return ok
+end
+
+function StartAutoFarm()
+    if State.AutoFarm then return end
+    State.AutoFarm = true
+    State.FarmTimer = 0
+    State.FarmTeleTimer = 0
+    State.FarmStake = nil
+    State.FarmStakeModel = nil
+    State.FarmLockedStake = nil
+    State.ClickCancelled = false
+    State.StopCooldown = 0    if ToggleRefs.autoFarm then ToggleRefs.autoFarm(true) end
+    if not LockAndStick() then
+        State.AutoFarm = false
+        if ToggleRefs.autoFarm then ToggleRefs.autoFarm(false) end
+        return
+    end
+
+    Notify("Auto Farm", "Started — locked to nearest log", "success")
+    ShowStickyFarmNotif()
+    ShowFarmHUD()
+
+    -- Continuous click loop
+    if State.FarmClickLoop then State.FarmClickLoop:Disconnect() end
+    State.FarmClickLoop = RunService.Heartbeat:Connect(function()
+        if not State.AutoFarm then return end
+        if CanClick() then PerformClick() end
+    end)
+
+    -- Aim + lock loop
+    if State.FarmAimLoop then State.FarmAimLoop:Disconnect() end
+    State.FarmAimLoop = RunService.Heartbeat:Connect(function()
+        if not State.AutoFarm then return end
+        local char = Player.Character
+        if not char then return end
+        local hrp = char:FindFirstChild("HumanoidRootPart")
+        local hum = char:FindFirstChildOfClass("Humanoid")
+        if not hrp then return end
+
+        if hum then
+            hum.WalkSpeed = 0
+            hum.JumpPower = 0
+            hum:Move(Vector3.new(0, 0, 0), false)
+        end
+
+        if State.FarmLockedStake and State.FarmLockedStake.Parent then
+            local part = State.FarmStake
+            if part and part.Parent then
+                local stakePos  = part.Position
+                local targetPos = stakePos + Vector3.new(0, 2, 2)
+                pcall(function()
+                    hrp.CFrame = CFrame.lookAt(targetPos, stakePos + Vector3.new(0, 1, 0))
+                    hrp.AssemblyLinearVelocity  = Vector3.new(0, 0, 0)
+                    hrp.AssemblyAngularVelocity = Vector3.new(0, 0, 0)
+                end)
+            end
+        else
+            task.defer(function()
+                Notify("Auto Farm", "Stake removed — stopping", "warn")
+                StopAutoFarm(false)
+            end)
+        end
+    end)
+
+    -- Teleport back to stake every N seconds
+    if State.FarmTeleLoop then State.FarmTeleLoop:Disconnect() end
+    State.FarmTeleLoop = RunService.Heartbeat:Connect(function(dt)
+        if not State.AutoFarm then return end
+        State.FarmTeleTimer += dt
+        if State.FarmTeleTimer >= CONFIG.FARM_TELE_INTERVAL then
+            State.FarmTeleTimer = 0
+            local char = Player.Character
+            if char and State.FarmStake and State.FarmStake.Parent then
+                local hrp = char:FindFirstChild("HumanoidRootPart")
+                if hrp then
+                    local stakePos  = State.FarmStake.Position
+                    local targetPos = stakePos + Vector3.new(0, 2, 2)
+                    pcall(function()
+                        hrp.CFrame = CFrame.lookAt(targetPos, stakePos + Vector3.new(0, 1, 0))
+                    end)
+                end
+            end
+        end
+    end)
+
+    -- Live HUD updates
+    task.spawn(function()
+        while State.AutoFarm do
+            task.wait(0.1)
+            State.FarmTimer += 0.1
+            if FarmTimeLbl and FarmTimeLbl.Parent then
+                FarmTimeLbl.Text = FormatTime(State.FarmTimer)
+            end
+            if FarmNextTeleLbl and FarmNextTeleLbl.Parent then
+                local left = CONFIG.FARM_TELE_INTERVAL - State.FarmTeleTimer
+                FarmNextTeleLbl.Text = string.format("%ds", math.max(0, math.floor(left)))
+            end
+            if _G.FarmHUDInfoLbl and _G.FarmHUDInfoLbl.Parent then
+                local name = State.FarmStakeModel and State.FarmStakeModel.Name or "???"
+                _G.FarmHUDInfoLbl.Text = "🎯 Target: " .. name
+            end
+        end
+    end)
+end
+
+function StopAutoFarm(respawn)
+    if not State.AutoFarm then return end
+
+    -- Cancel any in-flight click BEFORE touching anything else
+    State.ClickCancelled = true
+    State.AutoFarm = false
+    State.StopCooldown = os.clock() + 0.2
+
+    if ToggleRefs.autoFarm then ToggleRefs.autoFarm(false) end
+
+    -- Also kill the regular Auto Click if it was active
+    if State.AutoClick then
+        State.AutoClick = false
+        if ToggleRefs.autoClick then ToggleRefs.autoClick(false) end
+    end
+
+    if State.FarmClickLoop then State.FarmClickLoop:Disconnect(); State.FarmClickLoop = nil end
+    if State.FarmAimLoop   then State.FarmAimLoop:Disconnect();   State.FarmAimLoop   = nil end
+    if State.FarmTeleLoop  then State.FarmTeleLoop:Disconnect();  State.FarmTeleLoop  = nil end
+    if State.ClickLoop     then State.ClickLoop:Disconnect();     State.ClickLoop     = nil end
+
+    local char = Player.Character
+    if char then
+        local hum = char:FindFirstChildOfClass("Humanoid")
+        if hum then
+            hum.WalkSpeed = 16
+            hum.JumpPower = 50
+        end
+    end
+
+    State.FarmStake       = nil
+    State.FarmStakeModel  = nil
+    State.FarmLockedStake = nil
+
+    HideStickyFarmNotif()
+    HideFarmHUD()
+    Notify("Auto Farm", "Stopped — Time: " .. FormatTime(State.FarmTimer), "warn")
+
+    -- Release any stuck mouse button
+    pcall(function()
+        VirtualInputManager:SendMouseButtonEvent(0, 0, 0, false, game, 0)
+    end)
+
+    task.delay(0.25, function()
+        State.ClickCancelled = false
+    end)
+
+    if respawn then
+        task.wait(0.2)
+        local c = Player.Character
+        if c then
+            local h = c:FindFirstChildOfClass("Humanoid")
+            if h then
+                h.Health = 0
+                Notify("Respawn", "Respawning character...", "info")
+            end
+        end
+    end
+end
+
+-- ============================================================
+-- MAIN WINDOW
+-- ============================================================
+local Main = Make("Frame", {
+    Size             = UDim2.new(0, 560, 0, 460),
+    Position         = UDim2.new(0.5, -280, 0.5, -230),
+    BackgroundColor3 = C.BG1,
+    BorderSizePixel  = 0,
+    Parent           = ScreenGui,
+})
+Corner(Main, 20)
+Stroke(Main, C.StrokeHi, 1.8, 0.2)
+Gradient(Main, C.BG2, C.BG1, 135)
+
+-- Ambient glow
+local glow = Make("Frame", {
+    Size                  = UDim2.new(1, 0, 1, 0),
+    BackgroundColor3      = C.Primary,
+    BackgroundTransparency= 0.92,
+    BorderSizePixel       = 0,
+    ZIndex                = 0,
+    Parent                = Main,
+})
+Corner(glow, 20)
+Gradient(glow, C.Primary, C.Accent, 45)
+
+-- ============================================================
+-- TOP BAR
+-- ============================================================
+local TopBar = Make("Frame", {
+    Size             = UDim2.new(1, 0, 0, 52),
+    BackgroundColor3 = C.Glass,
+    BorderSizePixel  = 0,
+    ZIndex           = 2,
+    Parent           = Main,
+})
+Corner(TopBar, 20)
+Make("Frame", {
+    Size             = UDim2.new(1, 0, 0, 20),
+    Position         = UDim2.new(0, 0, 1, -20),
+    BackgroundColor3 = C.Glass,
+    BorderSizePixel  = 0,
+    ZIndex           = 2,
+    Parent           = TopBar,
+})
+Gradient(TopBar, C.GlassHi, C.Glass, 90)
+
+local Logo = Make("TextLabel", {
+    Size              = UDim2.new(0, 220, 1, 0),
+    Position          = UDim2.new(0, 20, 0, 0),
+    BackgroundTransparency = 1,
+    Text              = "🍪  OREO HUB",
+    TextColor3        = C.Text,
+    TextXAlignment    = Enum.TextXAlignment.Left,
+    Font              = Enum.Font.GothamBlack,
+    TextSize          = 20,
+    ZIndex            = 3,
+    Parent            = TopBar,
+})
+
+local hue = 0
+RunService.RenderStepped:Connect(function(dt)
+    if not Logo.Parent then return end
+    hue = (hue + dt * 0.35) % 1
+    Logo.TextColor3 = Color3.fromHSV(hue, 0.4, 1)
+end)
+
+local verPill = Make("Frame", {
+    Size             = UDim2.new(0, 62, 0, 22),
+    Position         = UDim2.new(0, 172, 0.5, -11),
+    BackgroundColor3 = C.Primary,
+    BorderSizePixel  = 0,
+    ZIndex           = 3,
+    Parent           = TopBar,
+})
+Corner(verPill, 11)
+Gradient(verPill, C.Primary, C.Accent, 45)
+Make("TextLabel", {
+    Size              = UDim2.new(1, 0, 1, 0),
+    BackgroundTransparency = 1,
+    Text              = "v6.2",
+    TextColor3        = Color3.new(1, 1, 1),
+    Font              = Enum.Font.GothamBlack,
+    TextSize          = 11,
+    ZIndex            = 4,
+    Parent            = verPill,
+})
+
+local vipBadge = Make("Frame", {
+    Size             = UDim2.new(0, 72, 0, 22),
+    Position         = UDim2.new(0, 240, 0.5, -11),
+    BackgroundColor3 = C.GlassHi,
+    BorderSizePixel  = 0,
+    ZIndex           = 3,
+    Parent           = TopBar,
+})
+Corner(vipBadge, 11)
+local vipBadgeLbl = Make("TextLabel", {
+    Size              = UDim2.new(1, 0, 1, 0),
+    BackgroundTransparency = 1,
+    Text              = "○ NORMAL",
+    TextColor3        = C.SubText,
+    Font              = Enum.Font.GothamBold,
+    TextSize          = 10,
+    ZIndex            = 4,
+    Parent            = vipBadge,
+})
+
+local function ControlButton(xOffset, symbol, color, callback)
+    local b = Make("TextButton", {
+        Size             = UDim2.new(0, 32, 0, 32),
+        Position         = UDim2.new(1, xOffset, 0.5, -16),
+        BackgroundColor3 = C.GlassHi,
+        BorderSizePixel  = 0,
+        Text             = symbol,
+        TextColor3       = color,
+        Font             = Enum.Font.GothamBold,
+        TextSize         = 15,
+        AutoButtonColor  = false,
+        ZIndex           = 3,
+        Parent           = TopBar,
+    })
+    Corner(b, 10)
+    b.MouseEnter:Connect(function()
+        Tween(b, 0.15, {BackgroundColor3 = color, TextColor3 = Color3.new(1, 1, 1)})
+    end)
+    b.MouseLeave:Connect(function()
+        Tween(b, 0.15, {BackgroundColor3 = C.GlassHi, TextColor3 = color})
+    end)
+    b.MouseButton1Click:Connect(callback)
+    return b
+end
+
+ControlButton(-118, "🔑", C.VIP, function()
+    if KeyGui then
+        KeyGui.Visible = true
+        KeyGui.Position = UDim2.new(0.5, -230, 0.5, -100)
+        KeyGui.BackgroundTransparency = 1
+        Tween(KeyGui, 0.4, {
+            Position = UDim2.new(0.5, -230, 0.5, -250),
+            BackgroundTransparency = 0,
+        }, Enum.EasingStyle.Back)
+    end
+end)
+
+ControlButton(-80, "–", C.Warn, function()
+    State.Minimized = not State.Minimized
+    local target = State.Minimized
+        and UDim2.new(0, 560, 0, 52)
+        or  UDim2.new(0, 560, 0, 460)
+    Tween(Main, 0.4, {Size = target}, Enum.EasingStyle.Back)
+end)
+
+ControlButton(-44, "✕", C.Danger, function()
+    Tween(Main, 0.35, {
+        Size = UDim2.new(0, 0, 0, 0),
+        Position = UDim2.new(0.5, 0, 0.5, 0),
+    }, Enum.EasingStyle.Back, Enum.EasingDirection.In)
+    task.wait(0.35)
+    ScreenGui:Destroy()
+end)
+
+-- ============================================================
+-- SIDEBAR
+-- ============================================================
+local Sidebar = Make("Frame", {
+    Size             = UDim2.new(0, 148, 1, -72),
+    Position         = UDim2.new(0, 12, 0, 60),
+    BackgroundColor3 = C.Glass,
+    BorderSizePixel  = 0,
+    ZIndex           = 2,
+    Parent           = Main,
+})
+Corner(Sidebar, 14)
+Stroke(Sidebar, C.Stroke, 1, 0.5)
+Gradient(Sidebar, C.GlassHi, C.GlassLo, 90)
+
+local ContentHolder = Make("Frame", {
+    Size                  = UDim2.new(1, -184, 1, -72),
+    Position              = UDim2.new(0, 172, 0, 60),
+    BackgroundTransparency= 1,
+    ZIndex                = 2,
+    Parent                = Main,
+})
+
+local TABS = {
+    {name = "Farm",     icon = "🌾"},
+    {name = "Bypass",   icon = "🛡️"},
+    {name = "Main",     icon = "🏠"},
+    {name = "Graphics", icon = "🖼️"},
+    {name = "Extras",   icon = "⚡"},
+    {name = "Player",   icon = "👤"},
+    {name = "Settings", icon = "⚙️"},
+    {name = "About",    icon = "ℹ️"},
+}
+
+local Pages, TabButtons = {}, {}
+local ActiveTab = "Farm"
+
+local function SwitchTab(name)
+    ActiveTab = name
+    for n, page in pairs(Pages) do
+        if n == name then
+            page.Visible = true
+            page.Position = UDim2.new(0, 10, 0, 0)
+            Tween(page, 0.35, {Position = UDim2.new(0, 0, 0, 0)})
+        else
+            page.Visible = false
+        end
+    end
+    for n, btn in pairs(TabButtons) do
+        local on = (n == name)
+        Tween(btn, 0.22, {
+            BackgroundColor3 = on and C.Primary or C.GlassLo,
+            TextColor3       = on and Color3.new(1, 1, 1) or C.SubText,
+        })
+        local accent = TabAccentMap[btn]
+        if accent then accent.Visible = on end
+    end
+end
+
+for i, tab in ipairs(TABS) do
+    local btn = Make("TextButton", {
+        Size             = UDim2.new(1, -16, 0, 38),
+        Position         = UDim2.new(0, 8, 0, 8 + (i - 1) * 42),
+        BackgroundColor3 = C.GlassLo,
+        BorderSizePixel  = 0,
+        Text             = "   " .. tab.icon .. "   " .. tab.name,
+        TextColor3       = C.SubText,
+        TextXAlignment   = Enum.TextXAlignment.Left,
+        Font             = Enum.Font.GothamBold,
+        TextSize         = 13,
+        AutoButtonColor  = false,
+        ZIndex           = 3,
+        Parent           = Sidebar,
+    })
+    Corner(btn, 10)
+
+    -- Left accent bar (visible only when tab is active)
+    local accent = Make("Frame", {
+        Size             = UDim2.new(0, 3, 0.6, 0),
+        Position         = UDim2.new(0, 4, 0.5, 0),
+        BackgroundColor3 = Color3.new(1, 1, 1),
+        BorderSizePixel  = 0,
+        Visible          = false,
+        ZIndex           = 4,
+        Parent           = btn,
+    })
+    Corner(accent, 2)
+    TabAccentMap[btn] = accent
+
+    btn.MouseEnter:Connect(function()
+        if ActiveTab ~= tab.name then
+            Tween(btn, 0.18, {BackgroundColor3 = C.GlassHi, TextColor3 = C.Text})
+        end
+    end)
+    btn.MouseLeave:Connect(function()
+        if ActiveTab ~= tab.name then
+            Tween(btn, 0.18, {BackgroundColor3 = C.GlassLo, TextColor3 = C.SubText})
+        end
+    end)
+    btn.MouseButton1Click:Connect(function() SwitchTab(tab.name) end)
+    TabButtons[tab.name] = btn
+
+    local page = Make("ScrollingFrame", {
+        Size                  = UDim2.new(1, 0, 1, 0),
+        BackgroundTransparency= 1,
+        BorderSizePixel       = 0,
+        ScrollBarThickness    = 4,
+        ScrollBarImageColor3  = C.Primary,
+        ScrollBarImageTransparency = 0.3,
+        CanvasSize            = UDim2.new(0, 0, 0, 600),
+        Visible               = false,
+        Parent                = ContentHolder,
+    })
+    Pages[tab.name] = page
+end
+
+-- ============================================================
+-- REUSABLE UI COMPONENTS
+-- ============================================================
+local function SectionTitle(parent, text, yPos)
+    local frame = Make("Frame", {
+        Size                  = UDim2.new(1, -14, 0, 28),
+        Position              = UDim2.new(0, 7, 0, yPos),
+        BackgroundTransparency= 1,
+        Parent                = parent,
+    })
+    local bar = Make("Frame", {
+        Size             = UDim2.new(0, 3, 0, 16),
+        Position         = UDim2.new(0, 0, 0.5, -8),
+        BackgroundColor3 = C.Primary,
+        BorderSizePixel  = 0,
+        Parent           = frame,
+    })
+    Corner(bar, 2)
+    Gradient(bar, C.Primary, C.Accent, 90)
+    Make("TextLabel", {
+        Size              = UDim2.new(1, -14, 1, 0),
+        Position          = UDim2.new(0, 12, 0, 0),
+        BackgroundTransparency = 1,
+        Text              = text:upper(),
+        TextColor3        = C.SubText,
+        TextXAlignment    = Enum.TextXAlignment.Left,
+        Font              = Enum.Font.GothamBlack,
+        TextSize          = 11,
+        Parent            = frame,
+    })
+end
+
+local function ToggleButton(parent, opts)
+    local card = Make("Frame", {
+        Size             = UDim2.new(1, -14, 0, 58),
+        Position         = UDim2.new(0, 7, 0, opts.yPos),
+        BackgroundColor3 = C.Glass,
+        BorderSizePixel  = 0,
+        Parent           = parent,
+    })
+    Corner(card, 12)
+    Stroke(card, C.Stroke, 1, 0.55)
+    Gradient(card, C.GlassHi, C.GlassLo, 35)
+
+    local icon = Make("TextLabel", {
+        Size             = UDim2.new(0, 40, 0, 40),
+        Position         = UDim2.new(0, 10, 0.5, -20),
+        BackgroundColor3 = C.GlassLo,
+        BorderSizePixel  = 0,
+        Text             = opts.icon or "⚙️",
+        TextColor3       = C.Text,
+        Font             = Enum.Font.GothamBold,
+        TextSize         = 20,
+        Parent           = card,
+    })
+    Corner(icon, 10)
+    Stroke(icon, C.Stroke, 1, 0.5)
+
+    local lockOverlay = nil
+    if opts.vipOnly then
+        lockOverlay = Make("TextLabel", {
+            Size             = UDim2.new(0, 22, 0, 22),
+            Position         = UDim2.new(0, 19, 0.5, -11),
+            BackgroundColor3 = C.VIP,
+            BorderSizePixel  = 0,
+            Text             = "🔒",
+            TextColor3       = Color3.fromRGB(30, 20, 0),
+            Font             = Enum.Font.GothamBold,
+            TextSize         = 13,
+            ZIndex           = 4,
+            Parent           = card,
+        })
+        Corner(lockOverlay, 11)
+        lockOverlay.Visible = not State.IsVIP
+    end
+
+    Make("TextLabel", {
+        Size              = UDim2.new(1, -200, 0, 18),
+        Position          = UDim2.new(0, 58, 0, 9),
+        BackgroundTransparency = 1,
+        Text              = opts.label,
+        TextColor3        = C.Text,
+        TextXAlignment    = Enum.TextXAlignment.Left,
+        Font              = Enum.Font.GothamBold,
+        TextSize          = 14,
+        Parent            = card,
+    })
+    Make("TextLabel", {
+        Size              = UDim2.new(1, -200, 0, 16),
+        Position          = UDim2.new(0, 58, 0, 30),
+        BackgroundTransparency = 1,
+        Text              = opts.desc or "",
+        TextColor3        = C.SubText,
+        TextXAlignment    = Enum.TextXAlignment.Left,
+        Font              = Enum.Font.Gotham,
+        TextSize          = 11,
+        Parent            = card,
+    })
+
+    local pill = Make("Frame", {
+        Size             = UDim2.new(0, 52, 0, 28),
+        Position         = UDim2.new(1, -64, 0.5, -14),
+        BackgroundColor3 = C.GlassLo,
+        BorderSizePixel  = 0,
+        Parent           = card,
+    })
+    Corner(pill, 14)
+    Stroke(pill, C.Stroke, 1, 0.4)
+
+    local knob = Make("Frame", {
+        Size             = UDim2.new(0, 20, 0, 20),
+        Position         = UDim2.new(0, 4, 0.5, -10),
+        BackgroundColor3 = C.Muted,
+        BorderSizePixel  = 0,
+        Parent           = pill,
+    })
+    Corner(knob, 10)
+
+    local state = opts.default or false
+    local clickArea = Make("TextButton", {
+        Size                  = UDim2.new(1, 0, 1, 0),
+        BackgroundTransparency= 1,
+        Text                  = "",
+        Parent                = card,
+    })
+
+    local function apply(on)
+        state = on
+        local onColor = opts.vipOnly and C.VIP or C.Success
+        Tween(pill, 0.25, {BackgroundColor3 = on and onColor or C.GlassLo})
+        Tween(knob, 0.3, {
+            Position         = on and UDim2.new(1, -24, 0.5, -10) or UDim2.new(0, 4, 0.5, -10),
+            BackgroundColor3 = on and Color3.new(1, 1, 1) or C.Muted,
+        }, Enum.EasingStyle.Back)
+    end
+
+    if state then apply(true) end
+    if opts.ref then ToggleRefs[opts.ref] = apply end
+
+    if opts.vipOnly then
+        local orig = _G.RefreshVIPUI
+        _G.RefreshVIPUI = function()
+            if orig then orig() end
+            if lockOverlay then lockOverlay.Visible = not State.IsVIP end
+            if not State.IsVIP and state then apply(false) end
+        end
+    end
+
+    clickArea.MouseButton1Click:Connect(function()
+        if opts.vipOnly and not State.IsVIP then
+            Notify("VIP Required ⭐", "Redeem a valid key first!", "warn")
             return
         end
-        AutoTeleBtn.Text = "✅ Auto Tele (60s): ON"
-        AutoTeleBtn.BackgroundColor3 = Color3.fromRGB(0, 150, 0)
-        AutoClickTimer = 0
-        print("🔄 [Oreo] Bật Auto Tele, sẽ tele sau 60 giây")
-        if TeleLoop then TeleLoop:Disconnect() end
-        TeleLoop = RunService.Heartbeat:Connect(function(deltaTime)
-            if not AutoTeleEnabled then
-                TeleLoop:Disconnect()
-                TeleLoop = nil
-                return
-            end
-            AutoClickTimer = AutoClickTimer + deltaTime
-            if AutoClickTimer >= TELEPORT_INTERVAL then
-                AutoClickTimer = 0
-                TeleportToSaved()
-            end
-        end)
+        apply(not state)
+        if opts.onChange then opts.onChange(state) end
+    end)
+
+    card.MouseEnter:Connect(function()
+        Tween(card, 0.2, {BackgroundColor3 = C.GlassHi})
+    end)
+    card.MouseLeave:Connect(function()
+        Tween(card, 0.2, {BackgroundColor3 = C.Glass})
+    end)
+
+    return card
+end
+
+local function ActionButton(parent, opts)
+    local btn = Make("TextButton", {
+        Size             = UDim2.new(1, -14, 0, 44),
+        Position         = UDim2.new(0, 7, 0, opts.yPos),
+        BackgroundColor3 = opts.color or C.Primary,
+        BorderSizePixel  = 0,
+        Text             = (opts.icon and (opts.icon .. "   ") or "") .. opts.label,
+        TextColor3       = Color3.new(1, 1, 1),
+        Font             = Enum.Font.GothamBold,
+        TextSize         = 14,
+        AutoButtonColor  = false,
+        Parent           = parent,
+    })
+    Corner(btn, 11)
+
+    if opts.color then
+        Gradient(btn, opts.color, opts.color:Lerp(Color3.new(0, 0, 0), 0.35), 45)
     else
-        AutoTeleBtn.Text = "⏳ Auto Tele (60s): OFF"
-        AutoTeleBtn.BackgroundColor3 = Color3.fromRGB(60, 60, 65)
-        if TeleLoop then TeleLoop:Disconnect(); TeleLoop = nil end
-        print("⛔ [Oreo] Tắt Auto Tele")
-        -- Không xóa vị trí đã lưu để dùng cho nút Tele ngay
+        Gradient(btn, C.Primary, C.Primary2, 45)
+    end
+
+    btn.MouseButton1Click:Connect(opts.onClick or function() end)
+    return btn
+end
+
+-- ============================================================
+-- KEY MANAGEMENT GUI
+-- ============================================================
+KeyGui = Make("Frame", {
+    Size             = UDim2.new(0, 460, 0, 500),
+    Position         = UDim2.new(0.5, -230, 0.5, -250),
+    BackgroundColor3 = C.BG1,
+    BorderSizePixel  = 0,
+    Visible          = false,
+    ZIndex           = 100,
+    Parent           = ScreenGui,
+})
+Corner(KeyGui, 20)
+Stroke(KeyGui, C.VIP, 2, 0.15)
+Gradient(KeyGui, C.BG2, C.BG1, 55)
+
+local keyTitleBar = Make("Frame", {
+    Size             = UDim2.new(1, 0, 0, 48),
+    BackgroundColor3 = C.Glass,
+    BorderSizePixel  = 0,
+    ZIndex           = 101,
+    Parent           = KeyGui,
+})
+Corner(keyTitleBar, 20)
+Make("Frame", {
+    Size             = UDim2.new(1, 0, 0, 20),
+    Position         = UDim2.new(0, 0, 1, -20),
+    BackgroundColor3 = C.Glass,
+    BorderSizePixel  = 0,
+    ZIndex           = 101,
+    Parent           = keyTitleBar,
+})
+Gradient(keyTitleBar, C.GlassHi, C.Glass, 90)
+
+Make("TextLabel", {
+    Size              = UDim2.new(1, -60, 1, 0),
+    Position          = UDim2.new(0, 20, 0, 0),
+    BackgroundTransparency = 1,
+    Text              = "🔑   KEY MANAGEMENT SYSTEM",
+    TextColor3        = C.VIP,
+    Font              = Enum.Font.GothamBlack,
+    TextSize          = 15,
+    TextXAlignment    = Enum.TextXAlignment.Left,
+    ZIndex            = 102,
+    Parent            = keyTitleBar,
+})
+
+local keyClose = Make("TextButton", {
+    Size             = UDim2.new(0, 32, 0, 32),
+    Position         = UDim2.new(1, -42, 0.5, -16),
+    BackgroundColor3 = C.GlassHi,
+    BorderSizePixel  = 0,
+    Text             = "✕",
+    TextColor3       = C.Danger,
+    Font             = Enum.Font.GothamBold,
+    TextSize         = 15,
+    AutoButtonColor  = false,
+    ZIndex           = 102,
+    Parent           = keyTitleBar,
+})
+Corner(keyClose, 10)
+keyClose.MouseButton1Click:Connect(function()
+    Tween(KeyGui, 0.25, {
+        Position = UDim2.new(0.5, -230, 0.5, -150),
+        BackgroundTransparency = 1,
+    })
+    task.wait(0.25)
+    KeyGui.Visible = false
+    KeyGui.Position = UDim2.new(0.5, -230, 0.5, -250)
+    KeyGui.BackgroundTransparency = 0
+end)
+
+local keyTabs = Make("Frame", {
+    Size             = UDim2.new(1, -40, 0, 36),
+    Position         = UDim2.new(0, 20, 0, 58),
+    BackgroundColor3 = C.GlassLo,
+    BorderSizePixel  = 0,
+    ZIndex           = 101,
+    Parent           = KeyGui,
+})
+Corner(keyTabs, 10)
+
+local creatorBtn = Make("TextButton", {
+    Size             = UDim2.new(0.5, -4, 1, -8),
+    Position         = UDim2.new(0, 4, 0, 4),
+    BackgroundColor3 = C.Primary,
+    BorderSizePixel  = 0,
+    Text             = "⚙  CREATOR",
+    TextColor3       = Color3.new(1, 1, 1),
+    Font             = Enum.Font.GothamBold,
+    TextSize         = 12,
+    AutoButtonColor  = false,
+    ZIndex           = 102,
+    Parent           = keyTabs,
+})
+Corner(creatorBtn, 8)
+
+local userBtn = Make("TextButton", {
+    Size             = UDim2.new(0.5, -4, 1, -8),
+    Position         = UDim2.new(0.5, 0, 0, 4),
+    BackgroundColor3 = C.GlassLo,
+    BorderSizePixel  = 0,
+    Text             = "👤  USER",
+    TextColor3       = C.SubText,
+    Font             = Enum.Font.GothamBold,
+    TextSize         = 12,
+    AutoButtonColor  = false,
+    ZIndex           = 102,
+    Parent           = keyTabs,
+})
+Corner(userBtn, 8)
+
+-- === Creator panel ===
+local creatorPanel = Make("Frame", {
+    Size                  = UDim2.new(1, -40, 0, 340),
+    Position              = UDim2.new(0, 20, 0, 108),
+    BackgroundTransparency= 1,
+    ZIndex                = 101,
+    Parent                = KeyGui,
+})
+
+Make("TextLabel", {
+    Size              = UDim2.new(1, 0, 0, 18),
+    Position          = UDim2.new(0, 0, 0, 0),
+    BackgroundTransparency = 1,
+    Text              = "🔐  Creator Secret:",
+    TextColor3        = C.Text,
+    Font              = Enum.Font.GothamBold,
+    TextSize          = 12,
+    TextXAlignment    = Enum.TextXAlignment.Left,
+    ZIndex            = 101,
+    Parent            = creatorPanel,
+})
+
+local secretBox = Make("TextBox", {
+    Size             = UDim2.new(1, 0, 0, 40),
+    Position         = UDim2.new(0, 0, 0, 22),
+    BackgroundColor3 = C.Glass,
+    BorderSizePixel  = 0,
+    Text             = "",
+    PlaceholderText  = "Enter creator secret...",
+    TextColor3       = C.Text,
+    PlaceholderColor3= C.Muted,
+    Font             = Enum.Font.Code,
+    TextSize         = 14,
+    TextXAlignment   = Enum.TextXAlignment.Left,
+    ClearTextOnFocus = false,
+    ZIndex           = 101,
+    Parent           = creatorPanel,
+})
+Corner(secretBox, 10)
+Stroke(secretBox, C.Stroke, 1.5, 0.3)
+Make("UIPadding", {PaddingLeft = UDim.new(0, 12)}, secretBox)
+
+Make("TextLabel", {
+    Size              = UDim2.new(1, 0, 0, 18),
+    Position          = UDim2.new(0, 0, 0, 76),
+    BackgroundTransparency = 1,
+    Text              = "⏱️  Duration per key:",
+    TextColor3        = C.Text,
+    Font              = Enum.Font.GothamBold,
+    TextSize          = 12,
+    TextXAlignment    = Enum.TextXAlignment.Left,
+    ZIndex            = 101,
+    Parent            = creatorPanel,
+})
+
+local durationBox = Make("TextBox", {
+    Size             = UDim2.new(1, 0, 0, 40),
+    Position         = UDim2.new(0, 0, 0, 98),
+    BackgroundColor3 = C.Glass,
+    BorderSizePixel  = 0,
+    Text             = "",
+    PlaceholderText  = "e.g. 1h / 30p / 2d / 7m",
+    TextColor3       = C.Text,
+    PlaceholderColor3= C.Muted,
+    Font             = Enum.Font.Code,
+    TextSize         = 14,
+    TextXAlignment   = Enum.TextXAlignment.Left,
+    ClearTextOnFocus = false,
+    ZIndex           = 101,
+    Parent           = creatorPanel,
+})
+Corner(durationBox, 10)
+Stroke(durationBox, C.Stroke, 1.5, 0.3)
+Make("UIPadding", {PaddingLeft = UDim.new(0, 12)}, durationBox)
+
+Make("TextLabel", {
+    Size              = UDim2.new(1, 0, 0, 18),
+    Position          = UDim2.new(0, 0, 0, 152),
+    BackgroundTransparency = 1,
+    Text              = "🔢  How many keys to generate:",
+    TextColor3        = C.Text,
+    Font              = Enum.Font.GothamBold,
+    TextSize          = 12,
+    TextXAlignment    = Enum.TextXAlignment.Left,
+    ZIndex            = 101,
+    Parent            = creatorPanel,
+})
+
+local countBox = Make("TextBox", {
+    Size             = UDim2.new(1, 0, 0, 40),
+    Position         = UDim2.new(0, 0, 0, 174),
+    BackgroundColor3 = C.Glass,
+    BorderSizePixel  = 0,
+    Text             = "1",
+    PlaceholderText  = "1-" .. tostring(CONFIG.MAX_KEYS_PER_BATCH),
+    TextColor3       = C.Text,
+    PlaceholderColor3= C.Muted,
+    Font             = Enum.Font.Code,
+    TextSize         = 14,
+    TextXAlignment   = Enum.TextXAlignment.Left,
+    ClearTextOnFocus = false,
+    ZIndex           = 101,
+    Parent           = creatorPanel,
+})
+Corner(countBox, 10)
+Stroke(countBox, C.Stroke, 1.5, 0.3)
+Make("UIPadding", {PaddingLeft = UDim.new(0, 12)}, countBox)
+
+local genBtn = Make("TextButton", {
+    Size             = UDim2.new(1, 0, 0, 46),
+    Position         = UDim2.new(0, 0, 0, 228),
+    BackgroundColor3 = C.VIP,
+    BorderSizePixel  = 0,
+    Text             = "✨   GENERATE KEYS",
+    TextColor3       = Color3.fromRGB(30, 20, 0),
+    Font             = Enum.Font.GothamBlack,
+    TextSize         = 14,
+    AutoButtonColor  = false,
+    ZIndex           = 101,
+    Parent           = creatorPanel,
+})
+Corner(genBtn, 12)
+Gradient(genBtn, C.VIP, C.Warn, 45)
+
+local creatorStatus = Make("TextLabel", {
+    Size              = UDim2.new(1, 0, 0, 34),
+    Position          = UDim2.new(0, 0, 0, 282),
+    BackgroundTransparency = 1,
+    Text              = "Waiting...",
+    TextColor3        = C.SubText,
+    Font              = Enum.Font.Gotham,
+    TextSize          = 11,
+    TextXAlignment    = Enum.TextXAlignment.Left,
+    TextWrapped       = true,
+    ZIndex            = 101,
+    Parent            = creatorPanel,
+})
+
+local keyOutputBox = Make("ScrollingFrame", {
+    Size             = UDim2.new(1, 0, 0, 120),
+    Position         = UDim2.new(0, 0, 0, 320),
+    BackgroundColor3 = C.BG1,
+    BorderSizePixel  = 0,
+    ScrollBarThickness   = 3,
+    ScrollBarImageColor3 = C.VIP,
+    CanvasSize       = UDim2.new(0, 0, 0, 100),
+    ZIndex           = 101,
+    Parent           = creatorPanel,
+})
+Corner(keyOutputBox, 10)
+Stroke(keyOutputBox, C.Stroke, 1, 0.5)
+
+local keyOutputLbl = Make("TextLabel", {
+    Size              = UDim2.new(1, -16, 1, 0),
+    Position          = UDim2.new(0, 8, 0, 0),
+    BackgroundTransparency = 1,
+    Text              = "",
+    TextColor3        = C.Text,
+    Font              = Enum.Font.Code,
+    TextSize          = 11,
+    TextXAlignment    = Enum.TextXAlignment.Left,
+    TextYAlignment    = Enum.TextYAlignment.Top,
+    TextWrapped       = true,
+    ZIndex            = 102,
+    Parent            = keyOutputBox,
+})
+
+genBtn.MouseButton1Click:Connect(function()
+    local secret = secretBox.Text
+    local dur    = durationBox.Text
+    local cnt    = tonumber(countBox.Text) or 1
+
+    if secret == "" or dur == "" then
+        creatorStatus.Text = "⚠️ Fill in secret + duration!"
+        creatorStatus.TextColor3 = C.Danger
+        return
+    end
+    if not CREATOR_SECRETS[secret] then
+        creatorStatus.Text = "❌ Invalid creator secret!"
+        creatorStatus.TextColor3 = C.Danger
+        return
+    end
+    local secs = ParseDuration(dur)
+    if not secs then
+        creatorStatus.Text = "❌ Bad duration. Use 1h / 30p / 2d / 7m"
+        creatorStatus.TextColor3 = C.Danger
+        return
+    end
+
+    cnt = math.clamp(cnt, 1, CONFIG.MAX_KEYS_PER_BATCH)
+
+    local generated = {}
+    for _ = 1, cnt do
+        local key = GenerateKey()
+        KeyStore[key] = {
+            duration  = secs,
+            used      = false,
+            created   = os.time(),
+            createdBy = Player.Name,
+        }
+        table.insert(generated, key)
+    end
+    SaveKeys()
+
+    creatorStatus.Text = "✅ Generated " .. cnt .. " key(s) for " .. FormatRemaining(secs) .. " each"
+    creatorStatus.TextColor3 = C.Success
+
+    local txt = table.concat(generated, "\n")
+    pcall(function()
+        if setclipboard then setclipboard(txt) end
+    end)
+    Notify("Keys Generated ⭐", cnt .. " key(s) copied to clipboard!", "vip", 6)
+
+    keyOutputLbl.Text = txt
+    keyOutputBox.CanvasSize = UDim2.new(0, 0, 0, #generated * 16 + 20)
+end)
+
+-- === User panel ===
+local userPanel = Make("Frame", {
+    Size                  = UDim2.new(1, -40, 0, 340),
+    Position              = UDim2.new(0, 20, 0, 108),
+    BackgroundTransparency= 1,
+    ZIndex                = 101,
+    Visible               = false,
+    Parent                = KeyGui,
+})
+
+Make("TextLabel", {
+    Size              = UDim2.new(1, 0, 0, 18),
+    Position          = UDim2.new(0, 0, 0, 0),
+    BackgroundTransparency = 1,
+    Text              = "🎫  Enter your VIP key:",
+    TextColor3        = C.Text,
+    Font              = Enum.Font.GothamBold,
+    TextSize          = 12,
+    TextXAlignment    = Enum.TextXAlignment.Left,
+    ZIndex            = 101,
+    Parent            = userPanel,
+})
+
+local userKeyBox = Make("TextBox", {
+    Size             = UDim2.new(1, 0, 0, 44),
+    Position         = UDim2.new(0, 0, 0, 22),
+    BackgroundColor3 = C.Glass,
+    BorderSizePixel  = 0,
+    Text             = "",
+    PlaceholderText  = "OREO-XXXX-XXXX-XXXX",
+    TextColor3       = C.Text,
+    PlaceholderColor3= C.Muted,
+    Font             = Enum.Font.Code,
+    TextSize         = 14,
+    TextXAlignment   = Enum.TextXAlignment.Left,
+    ClearTextOnFocus = false,
+    ZIndex           = 101,
+    Parent           = userPanel,
+})
+Corner(userKeyBox, 10)
+Stroke(userKeyBox, C.Stroke, 1.5, 0.3)
+Make("UIPadding", {PaddingLeft = UDim.new(0, 12)}, userKeyBox)
+
+local redeemBtn = Make("TextButton", {
+    Size             = UDim2.new(1, 0, 0, 46),
+    Position         = UDim2.new(0, 0, 0, 76),
+    BackgroundColor3 = C.Success,
+    BorderSizePixel  = 0,
+    Text             = "🎯   REDEEM KEY",
+    TextColor3       = Color3.new(1, 1, 1),
+    Font             = Enum.Font.GothamBlack,
+    TextSize         = 14,
+    AutoButtonColor  = false,
+    ZIndex           = 101,
+    Parent           = userPanel,
+})
+Corner(redeemBtn, 12)
+Gradient(redeemBtn, C.Success, C.Accent2, 45)
+
+local userStatus = Make("TextLabel", {
+    Size              = UDim2.new(1, 0, 0, 40),
+    Position          = UDim2.new(0, 0, 0, 132),
+    BackgroundTransparency = 1,
+    Text              = "Paste your key above and click Redeem.",
+    TextColor3        = C.SubText,
+    Font              = Enum.Font.Gotham,
+    TextSize          = 11,
+    TextXAlignment    = Enum.TextXAlignment.Left,
+    TextWrapped       = true,
+    ZIndex            = 101,
+    Parent            = userPanel,
+})
+
+local userVipCard = Make("Frame", {
+    Size             = UDim2.new(1, 0, 0, 80),
+    Position         = UDim2.new(0, 0, 0, 184),
+    BackgroundColor3 = C.GlassLo,
+    BorderSizePixel  = 0,
+    ZIndex           = 101,
+    Parent           = userPanel,
+})
+Corner(userVipCard, 12)
+Stroke(userVipCard, C.VIP, 1.3, 0.4)
+
+local userVipLbl = Make("TextLabel", {
+    Size              = UDim2.new(1, -20, 1, -16),
+    Position          = UDim2.new(0, 10, 0, 8),
+    BackgroundTransparency = 1,
+    Text              = "○  NOT VIP\nGet a key to unlock Bypass V2",
+    TextColor3        = C.SubText,
+    Font              = Enum.Font.Gotham,
+    TextSize          = 12,
+    TextXAlignment    = Enum.TextXAlignment.Left,
+    TextYAlignment    = Enum.TextYAlignment.Top,
+    TextWrapped       = true,
+    ZIndex            = 101,
+    Parent            = userVipCard,
+})
+
+local function ShowKeyPanel(which)
+    if which == "creator" then
+        creatorPanel.Visible = true
+        userPanel.Visible    = false
+        Tween(creatorBtn, 0.2, {BackgroundColor3 = C.Primary, TextColor3 = Color3.new(1, 1, 1)})
+        Tween(userBtn, 0.2, {BackgroundColor3 = C.GlassLo, TextColor3 = C.SubText})
+    else
+        creatorPanel.Visible = false
+        userPanel.Visible    = true
+        Tween(userBtn, 0.2, {BackgroundColor3 = C.Primary, TextColor3 = Color3.new(1, 1, 1)})
+        Tween(creatorBtn, 0.2, {BackgroundColor3 = C.GlassLo, TextColor3 = C.SubText})
     end
 end
-AutoTeleBtn.MouseButton1Click:Connect(ToggleAutoTele)
 
--- 3. Nút Tele ngay
-local TeleNowBtn = Instance.new("TextButton")
-TeleNowBtn.Size = UDim2.new(0, 220, 0, 35)
-TeleNowBtn.Position = UDim2.new(0.5, -110, 0, 110)
-TeleNowBtn.BackgroundColor3 = Color3.fromRGB(70, 70, 80)
-TeleNowBtn.Text = "📌 Tele về vị trí (Phím Y)"
-TeleNowBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-TeleNowBtn.TextScaled = true
-TeleNowBtn.Font = Enum.Font.Gotham
-TeleNowBtn.BorderSizePixel = 0
-TeleNowBtn.Parent = mainContent
-TeleNowBtn.MouseButton1Click:Connect(TeleportToSaved)
+creatorBtn.MouseButton1Click:Connect(function() ShowKeyPanel("creator") end)
+userBtn.MouseButton1Click:Connect(function() ShowKeyPanel("user") end)
 
--- 4. Nút Lưu vị trí (thêm để tiện)
-local SavePosBtn = Instance.new("TextButton")
-SavePosBtn.Size = UDim2.new(0, 220, 0, 35)
-SavePosBtn.Position = UDim2.new(0.5, -110, 0, 155)
-SavePosBtn.BackgroundColor3 = Color3.fromRGB(70, 70, 80)
-SavePosBtn.Text = "💾 Lưu vị trí hiện tại"
-SavePosBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-SavePosBtn.TextScaled = true
-SavePosBtn.Font = Enum.Font.Gotham
-SavePosBtn.BorderSizePixel = 0
-SavePosBtn.Parent = mainContent
-SavePosBtn.MouseButton1Click:Connect(SaveCurrentPosition)
+redeemBtn.MouseButton1Click:Connect(function()
+    local key = userKeyBox.Text:gsub("%s", "")
+    if key == "" then
+        userStatus.Text = "⚠️ Enter a key first!"
+        userStatus.TextColor3 = C.Danger
+        return
+    end
 
--- 5. Anti-AFK
-local AntiAFKBtn = Instance.new("TextButton")
-AntiAFKBtn.Size = UDim2.new(0, 220, 0, 35)
-AntiAFKBtn.Position = UDim2.new(0.5, -110, 0, 200)
-AntiAFKBtn.BackgroundColor3 = Color3.fromRGB(60, 60, 65)
-AntiAFKBtn.Text = "❌ Anti-AFK: OFF"
-AntiAFKBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-AntiAFKBtn.TextScaled = true
-AntiAFKBtn.Font = Enum.Font.Gotham
-AntiAFKBtn.BorderSizePixel = 0
-AntiAFKBtn.Parent = mainContent
-AntiAFKBtn.MouseButton1Click:Connect(function()
-    AntiAFKEnabled = not AntiAFKEnabled
-    AntiAFKBtn.Text = AntiAFKEnabled and "✅ Anti-AFK: ON" or "❌ Anti-AFK: OFF"
-    AntiAFKBtn.BackgroundColor3 = AntiAFKEnabled and Color3.fromRGB(0, 150, 0) or Color3.fromRGB(60, 60, 65)
-    if AntiAFKEnabled then
-        game:GetService("RunService").Heartbeat:Connect(function()
-            if AntiAFKEnabled and Player.Character and Player.Character:FindFirstChild("Humanoid") then
-                Player.Character.Humanoid:Move(Vector3.new(0,0,0), true)
+    -- Creator direct unlock
+    if CREATOR_SECRETS[key] then
+        State.IsVIP = true
+        State.VIPKey = "OWNER-UNLOCK"
+        State.VIPExpiry = os.time() + 365 * 86400
+        userStatus.Text = "👑 Owner unlocked!"
+        userStatus.TextColor3 = C.VIP
+        Notify("Owner Unlock", "Welcome, creator!", "vip", 6)
+        if _G.RefreshVIPUI then _G.RefreshVIPUI() end
+        return
+    end
+
+    local entry = KeyStore[key]
+    if not entry then
+        userStatus.Text = "❌ Invalid key!"
+        userStatus.TextColor3 = C.Danger
+        return
+    end
+    if entry.used then
+        userStatus.Text = "❌ Key already used!"
+        userStatus.TextColor3 = C.Danger
+        return
+    end
+
+    entry.used   = true
+    entry.usedBy = Player.Name
+    entry.usedAt = os.time()
+    SaveKeys()
+
+    State.IsVIP     = true
+    State.VIPKey    = key
+    State.VIPExpiry = os.time() + entry.duration
+
+    userStatus.Text = "✅ Activated! " .. FormatRemaining(entry.duration)
+    userStatus.TextColor3 = C.Success
+    Notify("VIP Activated ⭐", FormatRemaining(entry.duration), "vip", 6)
+
+    keyTitleBar.BackgroundColor3 = C.VIP
+    if _G.RefreshVIPUI then _G.RefreshVIPUI() end
+end)
+
+-- Live VIP status refresh
+task.spawn(function()
+    while userVipLbl.Parent do
+        if State.IsVIP then
+            local remaining = State.VIPExpiry - os.time()
+            if remaining <= 0 then
+                State.IsVIP = false
+                Notify("VIP Expired", "Key expired!", "error", 5)
             end
+            userVipLbl.Text = "👑  VIP ACTIVE\n" .. FormatRemaining(math.max(0, remaining)) .. " remaining"
+            userVipLbl.TextColor3 = C.VIP
+            vipBadgeLbl.Text = "⭐ VIP"
+            vipBadge.BackgroundColor3 = C.VIP
+            vipBadgeLbl.TextColor3 = Color3.fromRGB(30, 20, 0)
+        else
+            userVipLbl.Text = "○  NOT VIP\nGet a key to unlock Bypass V2"
+            userVipLbl.TextColor3 = C.SubText
+            vipBadgeLbl.Text = "○ NORMAL"
+            vipBadge.BackgroundColor3 = C.GlassHi
+            vipBadgeLbl.TextColor3 = C.SubText
+        end
+        task.wait(1)
+    end
+end)
+
+ShowKeyPanel("creator")
+
+-- ============================================================
+-- FARM TAB
+-- ============================================================
+local farmPage = Pages["Farm"]
+SectionTitle(farmPage, "Auto Farm — 30s Teleport + Aim", 5)
+
+ToggleButton(farmPage, {
+    label = "Auto Farm",
+    desc  = "Locks 1 log • Aims • Clicks • Teles every 30s",
+    icon  = "🌾",
+    yPos  = 36,
+    default = false,
+    ref   = "autoFarm",
+    onChange = function(on)
+        if on then StartAutoFarm() else StopAutoFarm(false) end
+    end,
+})
+
+SectionTitle(farmPage, "Status", 106)
+local farmInfo = Make("TextLabel", {
+    Size             = UDim2.new(1, -14, 0, 150),
+    Position         = UDim2.new(0, 7, 0, 136),
+    BackgroundColor3 = C.Glass,
+    BorderSizePixel  = 0,
+    Text             = "",
+    TextColor3       = C.Text,
+    Font             = Enum.Font.Code,
+    TextSize         = 12,
+    TextXAlignment   = Enum.TextXAlignment.Left,
+    TextYAlignment   = Enum.TextYAlignment.Top,
+    TextWrapped      = true,
+    Parent           = farmPage,
+})
+Corner(farmInfo, 12)
+Stroke(farmInfo, C.Stroke, 1, 0.5)
+Make("UIPadding", {PaddingLeft = UDim.new(0, 12), PaddingTop = UDim.new(0, 10)}, farmInfo)
+
+task.spawn(function()
+    while farmInfo.Parent do
+        if State.AutoFarm then
+            farmInfo.Text = string.format(
+                "🌾  Status:     ACTIVE\n" ..
+                "⏱️  Elapsed:    %s\n" ..
+                "🎯  Locked to:  %s\n" ..
+                "⏲️  Next tele:  %ds\n" ..
+                "🖱️  Click:      %d ms\n" ..
+                "🔒  Movement:   LOCKED",
+                FormatTime(State.FarmTimer),
+                State.FarmStakeModel and State.FarmStakeModel.Name or "searching...",
+                math.max(0, math.floor(CONFIG.FARM_TELE_INTERVAL - State.FarmTeleTimer)),
+                math.floor(State.ClickDelay * 1000))
+        else
+            farmInfo.Text = "🌾  Status:  IDLE\n\n" ..
+                "Source: workspace." .. CONFIG.FARM_NPC_FOLDER .. "\n" ..
+                "Target: " .. CONFIG.FARM_STAKE_KEYWORD .. "\n" ..
+                "Teleport: every " .. CONFIG.FARM_TELE_INTERVAL .. "s\n" ..
+                "Aim: locked on log\n\n" ..
+                "• Locks to ONE log\n" ..
+                "• Clicks + looks at it\n" ..
+                "• Teleports every " .. CONFIG.FARM_TELE_INTERVAL .. "s\n" ..
+                "• F2 or Stop button"
+        end
+        task.wait(0.3)
+    end
+end)
+
+ActionButton(farmPage, {
+    label  = "Stop Farm & Respawn",
+    icon   = "🛑",
+    yPos   = 296,
+    color  = C.Danger,
+    onClick = function() StopAutoFarm(true) end,
+})
+
+-- ============================================================
+-- BYPASS TAB
+-- ============================================================
+local bypassPage = Pages["Bypass"]
+SectionTitle(bypassPage, "Anti-Cheat Bypass", 5)
+
+ToggleButton(bypassPage, {
+    label = "Bypass V1 (Normal)",
+    desc  = "Basic AC script hiding — free",
+    icon  = "🛡️",
+    yPos  = 36,
+    default = false,
+    ref   = "bypassV1",
+    onChange = function(on)
+        State.BypassV1 = on
+        if on then StartBypassV1() else StopBypassV1() end
+    end,
+})
+
+ToggleButton(bypassPage, {
+    label = "BYPASS ANTI-CHEAT 100% VIP ⭐",
+    desc  = "Maximum protection — VIP only",
+    icon  = "👑",
+    yPos  = 102,
+    default = false,
+    ref   = "bypassV2",
+    vipOnly = true,
+    onChange = function(on)
+        State.BypassV2 = on
+        if on then StartBypassV2() else StopBypassV2() end
+    end,
+})
+
+SectionTitle(bypassPage, "Owner", 172)
+local ownerCard = Make("TextLabel", {
+    Size             = UDim2.new(1, -14, 0, 60),
+    Position         = UDim2.new(0, 7, 0, 202),
+    BackgroundColor3 = C.Glass,
+    BorderSizePixel  = 0,
+    Text             = "👤  VIP Owner:  " .. CONFIG.VIP_OWNER_USERNAME ..
+                       "\n🔑  Press 🔑 in top bar to open Key Manager",
+    TextColor3       = C.VIP,
+    Font             = Enum.Font.Code,
+    TextSize         = 11,
+    TextXAlignment   = Enum.TextXAlignment.Left,
+    TextYAlignment   = Enum.TextYAlignment.Top,
+    TextWrapped      = true,
+    Parent           = bypassPage,
+})
+Corner(ownerCard, 12)
+Make("UIPadding", {PaddingLeft = UDim.new(0, 12), PaddingTop = UDim.new(0, 8)}, ownerCard)
+
+-- ============================================================
+-- MAIN TAB
+-- ============================================================
+local mainPage = Pages["Main"]
+SectionTitle(mainPage, "Automation", 5)
+
+ToggleButton(mainPage, {
+    label = "Auto Click",
+    desc  = "Continuous mouse clicking",
+    icon  = "🖱️",
+    yPos  = 36,
+    default = false,
+    ref   = "autoClick",
+    onChange = function(on)
+        State.AutoClick = on
+        if on then
+            State.ClickCancelled = false
+            Notify("Auto Click", "ON", "success")
+            if State.ClickLoop then State.ClickLoop:Disconnect() end
+            State.ClickLoop = RunService.Heartbeat:Connect(function()
+                if not State.AutoClick then
+                    if State.ClickLoop then
+                        State.ClickLoop:Disconnect()
+                        State.ClickLoop = nil
+                    end
+                    return
+                end
+                if State.AutoFarm then return end
+                if CanClick() then PerformClick() end
+            end)
+        else
+            Notify("Auto Click", "OFF", "warn")
+            if State.ClickLoop then State.ClickLoop:Disconnect(); State.ClickLoop = nil end
+        end
+    end,
+})
+
+ToggleButton(mainPage, {
+    label = "Auto Tele",
+    desc  = "Teleport every " .. State.TeleInterval .. "s",
+    icon  = "⏳",
+    yPos  = 102,
+    default = false,
+    ref   = "autoTele",
+    onChange = function(on)
+        State.AutoTele = on
+        if on then
+            if not SavePosition() then return end
+            Notify("Auto Tele", "ON (" .. State.TeleInterval .. "s)", "success")
+            State.AutoClickTimer = 0
+            if State.TeleLoop then State.TeleLoop:Disconnect() end
+            State.TeleLoop = RunService.Heartbeat:Connect(function(dt)
+                if not State.AutoTele then
+                    if State.TeleLoop then
+                        State.TeleLoop:Disconnect()
+                        State.TeleLoop = nil
+                    end
+                    return
+                end
+                State.AutoClickTimer += dt
+                if State.AutoClickTimer >= State.TeleInterval then
+                    State.AutoClickTimer = 0
+                    TeleportToSaved()
+                end
+            end)
+        else
+            Notify("Auto Tele", "OFF", "warn")
+            if State.TeleLoop then State.TeleLoop:Disconnect(); State.TeleLoop = nil end
+        end
+    end,
+})
+
+ToggleButton(mainPage, {
+    label = "Anti AFK",
+    desc  = "Prevent idle kick",
+    icon  = "🛡️",
+    yPos  = 168,
+    default = false,
+    ref   = "antiAFK",
+    onChange = function(on)
+        State.AntiAFK = on
+        if on then
+            Notify("Anti AFK", "ON", "success")
+            if State.AFKLoop then State.AFKLoop:Disconnect() end
+            State.AFKLoop = RunService.Heartbeat:Connect(function()
+                if State.AntiAFK and Player.Character then
+                    local hum = Player.Character:FindFirstChildOfClass("Humanoid")
+                    if hum then hum:Move(Vector3.new(0, 0, 0), true) end
+                end
+            end)
+        else
+            Notify("Anti AFK", "OFF", "warn")
+            if State.AFKLoop then State.AFKLoop:Disconnect(); State.AFKLoop = nil end
+        end
+    end,
+})
+
+SectionTitle(mainPage, "Teleport", 238)
+ActionButton(mainPage, {
+    label = "Tele to Saved Position",
+    icon  = "📌",
+    yPos  = 268,
+    onClick = TeleportToSaved,
+})
+ActionButton(mainPage, {
+    label = "Save Current Position",
+    icon  = "💾",
+    yPos  = 318,
+    color = Color3.fromRGB(80, 140, 220),
+    onClick = SavePosition,
+})
+
+-- ============================================================
+-- GRAPHICS TAB
+-- ============================================================
+local graphicsPage = Pages["Graphics"]
+SectionTitle(graphicsPage, "Performance Boost", 5)
+
+ToggleButton(graphicsPage, {
+    label = "Fast Graphics",
+    desc  = "Lower quality, disable VFX for FPS",
+    icon  = "🚀",
+    yPos  = 36,
+    default = false,
+    ref   = "fastGraphics",
+    onChange = function(on)
+        State.FastGraphics = on
+        ApplyFastGraphics(on)
+    end,
+})
+
+ToggleButton(graphicsPage, {
+    label = "Full Bright",
+    desc  = "Brighten map, remove fog",
+    icon  = "☀️",
+    yPos  = 102,
+    default = false,
+    ref   = "fullBright",
+    onChange = function(on)
+        State.FullBright = on
+        ApplyFullBright(on)
+    end,
+})
+
+SectionTitle(graphicsPage, "Quality Presets", 172)
+ActionButton(graphicsPage, {
+    label = "Level 1 (Fastest)", icon = "🔻", yPos = 202,
+    color = Color3.fromRGB(90, 200, 140),
+    onClick = function()
+        pcall(function()
+            settings().Rendering.QualityLevel = Enum.QualityLevel.Level01
         end)
+        Notify("Graphics", "Level 1", "success")
+    end,
+})
+ActionButton(graphicsPage, {
+    label = "Level 10 (Best)", icon = "🔺", yPos = 252,
+    color = Color3.fromRGB(200, 100, 200),
+    onClick = function()
+        pcall(function()
+            settings().Rendering.QualityLevel = Enum.QualityLevel.Level10
+        end)
+        Notify("Graphics", "Level 10", "success")
+    end,
+})
+ActionButton(graphicsPage, {
+    label = "Auto", icon = "🔄", yPos = 302,
+    color = Color3.fromRGB(80, 140, 220),
+    onClick = function()
+        pcall(function()
+            settings().Rendering.QualityLevel = Enum.QualityLevel.Automatic
+        end)
+        Notify("Graphics", "Auto", "success")
+    end,
+})
+
+-- ============================================================
+-- EXTRAS TAB
+-- ============================================================
+local extrasPage = Pages["Extras"]
+SectionTitle(extrasPage, "Server", 5)
+
+ActionButton(extrasPage, {
+    label = "Rejoin Server", icon = "🔄", yPos = 36,
+    color = Color3.fromRGB(255, 150, 80),
+    onClick = function()
+        Notify("Rejoin", "Reconnecting...", "info")
+        task.wait(0.5)
+        game:GetService("TeleportService"):Teleport(game.PlaceId, Player)
+    end,
+})
+
+-- ============================================================
+-- PLAYER TAB
+-- ============================================================
+local playerPage = Pages["Player"]
+SectionTitle(playerPage, "Character", 5)
+
+ActionButton(playerPage, {
+    label = "Reset Character", icon = "♻️", yPos = 36,
+    color = Color3.fromRGB(200, 70, 90),
+    onClick = function()
+        local char = Player.Character
+        if char and char:FindFirstChildOfClass("Humanoid") then
+            char:FindFirstChildOfClass("Humanoid").Health = 0
+        end
+    end,
+})
+
+ActionButton(playerPage, {
+    label = "Heal to Full", icon = "❤️", yPos = 86,
+    color = Color3.fromRGB(90, 210, 110),
+    onClick = function()
+        local char = Player.Character
+        if char and char:FindFirstChildOfClass("Humanoid") then
+            local h = char:FindFirstChildOfClass("Humanoid")
+            h.Health = h.MaxHealth
+        end
+    end,
+})
+
+SectionTitle(playerPage, "Live Info", 150)
+local infoLbl = Make("TextLabel", {
+    Size             = UDim2.new(1, -14, 0, 140),
+    Position         = UDim2.new(0, 7, 0, 180),
+    BackgroundColor3 = C.Glass,
+    BorderSizePixel  = 0,
+    Text             = "",
+    TextColor3       = C.Text,
+    Font             = Enum.Font.Code,
+    TextSize         = 12,
+    TextXAlignment   = Enum.TextXAlignment.Left,
+    TextYAlignment   = Enum.TextYAlignment.Top,
+    TextWrapped      = true,
+    Parent           = playerPage,
+})
+Corner(infoLbl, 12)
+Stroke(infoLbl, C.Stroke, 1, 0.5)
+Make("UIPadding", {PaddingLeft = UDim.new(0, 12), PaddingTop = UDim.new(0, 10)}, infoLbl)
+
+task.spawn(function()
+    while infoLbl.Parent do
+        local char = Player.Character
+        local pos  = (char and char:FindFirstChild("HumanoidRootPart")
+                     and char.HumanoidRootPart.Position) or Vector3.new()
+        local ping = Player:GetNetworkPing() * 1000
+        infoLbl.Text = string.format(
+            "👤  %s\n🆔  %d\n📍  X: %.1f  Y: %.1f  Z: %.1f\n📡  Ping: %.0f ms\n🎮  Server: %s",
+            Player.Name, Player.UserId, pos.X, pos.Y, pos.Z, ping,
+            game.JobId:sub(1, 8) .. "...")
+        task.wait(0.5)
     end
 end)
 
--- ================= SETTINGS TAB =================
-local settingsContent = ContentFrames["Settings"]
-local AntiLagBtn = Instance.new("TextButton")
-AntiLagBtn.Size = UDim2.new(0, 180, 0, 40)
-AntiLagBtn.Position = UDim2.new(0.5, -90, 0, 10)
-AntiLagBtn.BackgroundColor3 = Color3.fromRGB(60, 60, 65)
-AntiLagBtn.Text = "❌ Anti-Lag: OFF"
-AntiLagBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-AntiLagBtn.TextScaled = true
-AntiLagBtn.Font = Enum.Font.Gotham
-AntiLagBtn.BorderSizePixel = 0
-AntiLagBtn.Parent = settingsContent
-AntiLagBtn.MouseButton1Click:Connect(function()
-    AntiLagEnabled = not AntiLagEnabled
-    AntiLagBtn.Text = AntiLagEnabled and "✅ Anti-Lag: ON" or "❌ Anti-Lag: OFF"
-    AntiLagBtn.BackgroundColor3 = AntiLagEnabled and Color3.fromRGB(0, 150, 0) or Color3.fromRGB(60, 60, 65)
+-- ============================================================
+-- SETTINGS TAB
+-- ============================================================
+local settingsPage = Pages["Settings"]
+SectionTitle(settingsPage, "Auto Click", 5)
+
+local clickDelayCard = Make("Frame", {
+    Size             = UDim2.new(1, -14, 0, 76),
+    Position         = UDim2.new(0, 7, 0, 36),
+    BackgroundColor3 = C.Glass,
+    BorderSizePixel  = 0,
+    Parent           = settingsPage,
+})
+Corner(clickDelayCard, 12)
+Stroke(clickDelayCard, C.Stroke, 1, 0.5)
+
+Make("TextLabel", {
+    Size              = UDim2.new(1, -24, 0, 20),
+    Position          = UDim2.new(0, 14, 0, 10),
+    BackgroundTransparency = 1,
+    Text              = "🖱️  Click Delay",
+    TextColor3        = C.Text,
+    TextXAlignment    = Enum.TextXAlignment.Left,
+    Font              = Enum.Font.GothamBold,
+    TextSize          = 13,
+    Parent            = clickDelayCard,
+})
+local delayValLbl = Make("TextLabel", {
+    Size              = UDim2.new(0, 70, 0, 20),
+    Position          = UDim2.new(1, -84, 0, 10),
+    BackgroundTransparency = 1,
+    Text              = string.format("%.2fs", State.ClickDelay),
+    TextColor3        = C.Primary,
+    TextXAlignment    = Enum.TextXAlignment.Right,
+    Font              = Enum.Font.Code,
+    TextSize          = 13,
+    Parent            = clickDelayCard,
+})
+
+local function MakeSlider(parent, yPos, min, max, default, onChange)
+    local track = Make("Frame", {
+        Size             = UDim2.new(1, -28, 0, 6),
+        Position         = UDim2.new(0, 14, 0, yPos),
+        BackgroundColor3 = C.GlassLo,
+        BorderSizePixel  = 0,
+        Parent           = parent,
+    })
+    Corner(track, 3)
+
+    local fill = Make("Frame", {
+        Size             = UDim2.new((default - min) / (max - min), 0, 1, 0),
+        BackgroundColor3 = C.Primary,
+        BorderSizePixel  = 0,
+        Parent           = track,
+    })
+    Corner(fill, 3)
+    Gradient(fill, C.Primary, C.Accent, 0)
+
+    local knob = Make("Frame", {
+        Size             = UDim2.new(0, 16, 0, 16),
+        Position         = UDim2.new(fill.Size.X.Scale, -8, 0.5, -8),
+        BackgroundColor3 = Color3.new(1, 1, 1),
+        BorderSizePixel  = 0,
+        Parent           = track,
+    })
+    Corner(knob, 8)
+    Stroke(knob, C.Primary, 2, 0)
+
+    local dragging = false
+    local function update(x)
+        local rel = math.clamp((x - track.AbsolutePosition.X) / track.AbsoluteSize.X, 0, 1)
+        local val = min + (max - min) * rel
+        fill.Size = UDim2.new(rel, 0, 1, 0)
+        knob.Position = UDim2.new(rel, -8, 0.5, -8)
+        if onChange then onChange(val) end
+    end
+
+    track.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1
+            or input.UserInputType == Enum.UserInputType.Touch then
+            dragging = true
+            update(input.Position.X)
+        end
+    end)
+    UserInputService.InputChanged:Connect(function(input)
+        if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement
+            or input.UserInputType == Enum.UserInputType.Touch) then
+            update(input.Position.X)
+        end
+    end)
+    UserInputService.InputEnded:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1
+            or input.UserInputType == Enum.UserInputType.Touch then
+            dragging = false
+        end
+    end)
+end
+
+MakeSlider(clickDelayCard, 50, 0.01, 0.5, State.ClickDelay, function(v)
+    State.ClickDelay = v
+    delayValLbl.Text = string.format("%.2fs", v)
 end)
 
--- ================= ABOUT TAB =================
-local aboutContent = ContentFrames["About"]
-local AboutLabel = Instance.new("TextLabel")
-AboutLabel.Size = UDim2.new(1, 0, 1, 0)
-AboutLabel.BackgroundTransparency = 1
-AboutLabel.Text = "🍪 Oreo Hub\nVer 3.0 - Click & Tele độc lập\nT: tắt Auto Click | Y: Tele ngay"
-AboutLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
-AboutLabel.TextScaled = true
-AboutLabel.Font = Enum.Font.Gotham
-AboutLabel.TextYAlignment = Enum.TextYAlignment.Top
-AboutLabel.Parent = aboutContent
+SectionTitle(settingsPage, "Auto Tele", 128)
+local teleIntervalCard = Make("Frame", {
+    Size             = UDim2.new(1, -14, 0, 76),
+    Position         = UDim2.new(0, 7, 0, 158),
+    BackgroundColor3 = C.Glass,
+    BorderSizePixel  = 0,
+    Parent           = settingsPage,
+})
+Corner(teleIntervalCard, 12)
+Stroke(teleIntervalCard, C.Stroke, 1, 0.5)
 
--- Kéo thả GUI
-local dragging = false
-local dragStart, startPos
-Title.InputBegan:Connect(function(input)
-    if input.UserInputType == Enum.UserInputType.MouseButton1 then
-        dragging = true
-        dragStart = input.Position
-        startPos = MainFrame.Position
-    end
-end)
-Title.InputEnded:Connect(function(input)
-    if input.UserInputType == Enum.UserInputType.MouseButton1 then
-        dragging = false
-    end
-end)
-UserInputService.InputChanged:Connect(function(input)
-    if dragging and input.UserInputType == Enum.UserInputType.MouseMovement then
-        local delta = input.Position - dragStart
-        MainFrame.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
-    end
+Make("TextLabel", {
+    Size              = UDim2.new(1, -24, 0, 20),
+    Position          = UDim2.new(0, 14, 0, 10),
+    BackgroundTransparency = 1,
+    Text              = "⏳  Auto Tele Interval",
+    TextColor3        = C.Text,
+    TextXAlignment    = Enum.TextXAlignment.Left,
+    Font              = Enum.Font.GothamBold,
+    TextSize          = 13,
+    Parent            = teleIntervalCard,
+})
+local teleValLbl = Make("TextLabel", {
+    Size              = UDim2.new(0, 70, 0, 20),
+    Position          = UDim2.new(1, -84, 0, 10),
+    BackgroundTransparency = 1,
+    Text              = State.TeleInterval .. "s",
+    TextColor3        = C.Primary,
+    TextXAlignment    = Enum.TextXAlignment.Right,
+    Font              = Enum.Font.Code,
+    TextSize          = 13,
+    Parent            = teleIntervalCard,
+})
+MakeSlider(teleIntervalCard, 50, 5, 300, State.TeleInterval, function(v)
+    State.TeleInterval = math.floor(v)
+    teleValLbl.Text = math.floor(v) .. "s"
 end)
 
--- ===== PHÍM TẮT =====
-UserInputService.InputBegan:Connect(function(input, gameProcessed)
-    if gameProcessed then return end
-    -- T: Tắt Auto Click
+-- ============================================================
+-- ABOUT TAB
+-- ============================================================
+local aboutPage = Pages["About"]
+local aboutCard = Make("Frame", {
+    Size             = UDim2.new(1, -14, 0, 290),
+    Position         = UDim2.new(0, 7, 0, 10),
+    BackgroundColor3 = C.Glass,
+    BorderSizePixel  = 0,
+    Parent           = aboutPage,
+})
+Corner(aboutCard, 16)
+Stroke(aboutCard, C.Primary, 1.5, 0.35)
+Gradient(aboutCard, C.GlassHi, C.GlassLo, 45)
+
+Make("TextLabel", {
+    Size              = UDim2.new(1, 0, 0, 60),
+    Position          = UDim2.new(0, 0, 0, 16),
+    BackgroundTransparency = 1,
+    Text              = "🍪",
+    Font              = Enum.Font.GothamBold,
+    TextSize          = 50,
+    Parent            = aboutCard,
+})
+local aboutTitle = Make("TextLabel", {
+    Size              = UDim2.new(1, 0, 0, 28),
+    Position          = UDim2.new(0, 0, 0, 78),
+    BackgroundTransparency = 1,
+    Text              = "OREO HUB ULTIMATE",
+    TextColor3        = C.Text,
+    Font              = Enum.Font.GothamBlack,
+    TextSize          = 22,
+    Parent            = aboutCard,
+})
+Gradient(aboutTitle, C.Primary, C.Accent, 0)
+
+Make("TextLabel", {
+    Size              = UDim2.new(1, 0, 0, 20),
+    Position          = UDim2.new(0, 0, 0, 110),
+    BackgroundTransparency = 1,
+    Text              = "Version 6.2  •  Ultimate Rebuild",
+    TextColor3        = C.SubText,
+    Font              = Enum.Font.Gotham,
+    TextSize          = 12,
+    Parent            = aboutCard,
+})
+
+Make("TextLabel", {
+    Size              = UDim2.new(1, -30, 0, 140),
+    Position          = UDim2.new(0, 15, 0, 140),
+    BackgroundTransparency = 1,
+    Text = "Hotkeys:\n" ..
+        "T = Toggle Auto Click\n" ..
+        "Y = Teleport Now\n" ..
+        "U = Toggle Auto Tele\n" ..
+        "G = Toggle Fast Graphics\n" ..
+        "F2 = Stop Auto Farm (with respawn)\n" ..
+        "RightCtrl = Show / Hide Menu\n\n" ..
+        "⭐ VIP Owner:  " .. CONFIG.VIP_OWNER_USERNAME,
+    TextColor3        = C.SubText,
+    Font              = Enum.Font.Gotham,
+    TextSize          = 11,
+    TextWrapped       = true,
+    TextXAlignment    = Enum.TextXAlignment.Left,
+    TextYAlignment    = Enum.TextYAlignment.Top,
+    Parent            = aboutCard,
+})
+
+-- ============================================================
+-- COMPLETE HIDE / SHOW
+-- ============================================================
+local function SetMenuVisible(visible)
+    State.MenuVisible = visible
+    if visible then
+        Main.Visible = true
+        Main.Position = UDim2.new(0.5, -280, 0.5, -240)
+        Main.BackgroundTransparency = 1
+        Tween(Main, 0.35, {
+            Position = UDim2.new(0.5, -280, 0.5, -230),
+            BackgroundTransparency = 0,
+        }, Enum.EasingStyle.Back)
+    else
+        Tween(Main, 0.3, {
+            Position = UDim2.new(0.5, -280, 0.5, -180),
+            BackgroundTransparency = 1,
+        }, Enum.EasingStyle.Quad, Enum.EasingDirection.In)
+        task.wait(0.3)
+        Main.Visible = false
+    end
+end
+
+-- ============================================================
+-- DRAG SUPPORT
+-- ============================================================
+do
+    local dragging, dragStart, startPos
+    TopBar.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1
+            or input.UserInputType == Enum.UserInputType.Touch then
+            dragging = true
+            dragStart = input.Position
+            startPos = Main.Position
+        end
+    end)
+    TopBar.InputEnded:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1
+            or input.UserInputType == Enum.UserInputType.Touch then
+            dragging = false
+        end
+    end)
+    UserInputService.InputChanged:Connect(function(input)
+        if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement
+            or input.UserInputType == Enum.UserInputType.Touch) then
+            local delta = input.Position - dragStart
+            Main.Position = UDim2.new(
+                startPos.X.Scale, startPos.X.Offset + delta.X,
+                startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+        end
+    end)
+end
+
+-- ============================================================
+-- HOTKEYS
+-- ============================================================
+UserInputService.InputBegan:Connect(function(input, processed)
+    if processed then return end
+
     if input.KeyCode == Enum.KeyCode.T then
-        if AutoClickEnabled then
-            print("⌨️ [Oreo] Tắt Auto Click bằng phím T")
-            ToggleAutoClick()
+        local newState = not State.AutoClick
+        if ToggleRefs.autoClick then ToggleRefs.autoClick(newState) end
+        State.AutoClick = newState
+        if newState then
+            State.ClickCancelled = false
+            Notify("Hotkey T", "Auto Click ON", "success")
+            if State.ClickLoop then State.ClickLoop:Disconnect() end
+            State.ClickLoop = RunService.Heartbeat:Connect(function()
+                if not State.AutoClick then
+                    if State.ClickLoop then
+                        State.ClickLoop:Disconnect()
+                        State.ClickLoop = nil
+                    end
+                    return
+                end
+                if State.AutoFarm then return end
+                if CanClick() then PerformClick() end
+            end)
+        else
+            Notify("Hotkey T", "Auto Click OFF", "warn")
+            if State.ClickLoop then State.ClickLoop:Disconnect(); State.ClickLoop = nil end
         end
     end
-    -- Y: Tele ngay
+
     if input.KeyCode == Enum.KeyCode.Y then
-        print("⌨️ [Oreo] Tele ngay bằng phím Y")
         TeleportToSaved()
     end
-    -- U: Bật/tắt Auto Tele (tiện lợi)
+
     if input.KeyCode == Enum.KeyCode.U then
-        ToggleAutoTele()
+        local newState = not State.AutoTele
+        if ToggleRefs.autoTele then ToggleRefs.autoTele(newState) end
+        State.AutoTele = newState
+        if newState then
+            if SavePosition() then
+                Notify("Hotkey U", "Auto Tele ON", "success")
+                State.AutoClickTimer = 0
+                if State.TeleLoop then State.TeleLoop:Disconnect() end
+                State.TeleLoop = RunService.Heartbeat:Connect(function(dt)
+                    if not State.AutoTele then
+                        if State.TeleLoop then
+                            State.TeleLoop:Disconnect()
+                            State.TeleLoop = nil
+                        end
+                        return
+                    end
+                    State.AutoClickTimer += dt
+                    if State.AutoClickTimer >= State.TeleInterval then
+                        State.AutoClickTimer = 0
+                        TeleportToSaved()
+                    end
+                end)
+            end
+        else
+            Notify("Hotkey U", "Auto Tele OFF", "warn")
+            if State.TeleLoop then State.TeleLoop:Disconnect(); State.TeleLoop = nil end
+        end
+    end
+
+    if input.KeyCode == Enum.KeyCode.G then
+        local newState = not State.FastGraphics
+        if ToggleRefs.fastGraphics then ToggleRefs.fastGraphics(newState) end
+        State.FastGraphics = newState
+        ApplyFastGraphics(newState)
+    end
+
+    if input.KeyCode == Enum.KeyCode.F2 then
+        if State.AutoFarm then
+            StopAutoFarm(true)
+        else
+            Notify("Hotkey F2", "Auto Farm is not active", "warn")
+        end
+    end
+
+    if input.KeyCode == Enum.KeyCode.RightControl then
+        SetMenuVisible(not State.MenuVisible)
     end
 end)
+
+-- ============================================================
+-- INTRO
+-- ============================================================
+SwitchTab("Farm")
+Notify("Oreo Hub v6.2", "Loaded! Press RightCtrl to h
